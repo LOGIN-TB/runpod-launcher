@@ -62,6 +62,20 @@ export const errors = {
       'service_unavailable',
     ),
 
+  /**
+   * The schedule says the model is off right now.
+   *
+   * Not an error in the pod: renting hardware the schedule has just released
+   * would make the schedule pointless, so the request is refused with the hours
+   * and a way to override them.
+   */
+  outsideHours: (window: string) =>
+    openAiError(
+      `This model runs ${window}. It is outside those hours, so nothing was started — start it from the launcher app if you need it now.`,
+      'server_error',
+      'outside_scheduled_hours',
+    ),
+
   upstream: (detail: string) =>
     openAiError(`Upstream inference server failed: ${detail}`, 'server_error', 'upstream_error'),
 }

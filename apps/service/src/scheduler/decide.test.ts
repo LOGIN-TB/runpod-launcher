@@ -32,6 +32,7 @@ const pod = (overrides: Partial<PodState> = {}): PodState => ({
   // Most tests are about the schedule acting on its own; the manual-start
   // exception has its own cases below.
   startedManually: false,
+  inFlightRequests: 0,
   ...overrides,
 })
 
@@ -381,4 +382,48 @@ test('the runtime ceiling still applies to a manual start', () => {
     now: at('2026-09-01T18:00:00Z'),
   })
   assert.equal(action.because, 'max-runtime')
+})
+
+test('a pod serving a request is not stopped out from under it', () => {
+  // Observed: a request arrived at 21:30:08 and the schedule stopped the pod at
+  // 21:30:19. The agent lost eleven seconds of work and simply asked again.
+  const action = decide({
+    template: template(), // window has closed
+    pod: pod({ inFlightRequests: 1, startedManually: false, startedAt: at('2026-09-01T17:00:00Z') }),
+    spend: noLimits,
+    now: at('2026-09-01T18:00:00Z'),
+  })
+  assert.deepEqual(action, { do: 'nothing', because: 'serving-requests' })
+})
+
+test('once the request finishes, the schedule stops it as it should', () => {
+  const action = decide({
+    template: template(),
+    pod: pod({ inFlightRequests: 0, startedManually: false, startedAt: at('2026-09-01T17:00:00Z'), lastRequestAt: at('2026-09-01T17:59:00Z') }),
+    spend: noLimits,
+    now: at('2026-09-01T18:00:00Z'),
+  })
+  assert.deepEqual(action, { do: 'stop', because: 'outside-schedule' })
+})
+
+test('the runtime ceiling still overrides work in progress', () => {
+  // The one rule that must not be deferred: it exists to bound a pod that
+  // something is keeping permanently busy.
+  const action = decide({
+    template: template({ maxRuntimeHours: 2 }),
+    pod: pod({ inFlightRequests: 3, startedAt: at('2026-09-01T04:00:00Z') }),
+    spend: noLimits,
+    now: at('2026-09-01T18:00:00Z'),
+  })
+  assert.deepEqual(action, { do: 'stop', because: 'max-runtime' })
+})
+
+test('a spend limit is not deferred either', () => {
+  const action = decide({
+    template: template(),
+    pod: pod({ inFlightRequests: 5 }),
+    spend: { todayUsd: 99, monthUsd: 99, dailyLimitUsd: 10, monthlyLimitUsd: null },
+    now: at('2026-09-01T08:00:00Z'),
+  })
+  assert.equal(action.because, 'daily-limit')
 })

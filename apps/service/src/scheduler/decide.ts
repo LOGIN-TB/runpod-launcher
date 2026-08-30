@@ -25,6 +25,7 @@ export type Reason =
   | 'starting'
   | 'idle-until-requested'
   | 'manual-start'
+  | 'serving-requests'
 
 export interface PodState {
   status: 'RUNNING' | 'STARTING' | 'PROVISIONING' | 'EXITED' | 'ERROR' | 'TERMINATED' | null
@@ -38,6 +39,14 @@ export interface PodState {
    * that as idle time bills for the download and then throws it away.
    */
   engineReady: boolean
+  /**
+   * Requests being served right now.
+   *
+   * Stopping a pod mid-generation discards work somebody is waiting on, and
+   * the client will simply ask again — which under wake-on-request rents
+   * another pod moments later.
+   */
+  inFlightRequests: number
   /**
    * True when a person started this pod rather than the schedule.
    *
@@ -92,12 +101,16 @@ export function decide(args: {
   if (isComingUp) return { do: 'nothing', because: 'starting' }
 
   if (isUp) {
+    // Never cut off work in progress, except for the two rules that exist to
+    // stop money being spent: the runtime ceiling and the spend limits, both
+    // handled above and below this point respectively.
+    if (pod.inFlightRequests > 0 && !exceedsRuntimeCeiling(template, pod, now)) {
+      return { do: 'nothing', because: 'serving-requests' }
+    }
+
     // A hard ceiling on one run. This is the backstop against a pod that
     // nothing else notices — a stuck workflow keeping it "busy" all weekend.
-    if (schedule.maxRuntimeHours > 0 && pod.startedAt) {
-      const hoursUp = (now.getTime() - pod.startedAt.getTime()) / 3_600_000
-      if (hoursUp >= schedule.maxRuntimeHours) return { do: 'stop', because: 'max-runtime' }
-    }
+    if (exceedsRuntimeCeiling(template, pod, now)) return { do: 'stop', because: 'max-runtime' }
 
     // Nothing is idle until it can serve. Measured live: a pod was stopped for
     // idleness 64 seconds after starting, with a 30-minute limit, because it
@@ -212,6 +225,13 @@ export function windowOpenedAt(schedule: Template['schedule'], now: Date): Date 
     nowMinutes >= startMinutes ? nowMinutes - startMinutes : nowMinutes + (24 * 60 - startMinutes)
 
   return new Date(now.getTime() - minutesSinceOpen * 60_000)
+}
+
+/** Past its hard runtime limit? The one rule that overrides work in progress. */
+function exceedsRuntimeCeiling(template: Template, pod: PodState, now: Date): boolean {
+  const hours = template.schedule.maxRuntimeHours
+  if (hours <= 0 || !pod.startedAt) return false
+  return (now.getTime() - pod.startedAt.getTime()) / 3_600_000 >= hours
 }
 
 /** Has any request reached this pod since it started? */

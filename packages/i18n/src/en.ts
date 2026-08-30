@@ -157,6 +157,7 @@ export const en = {
   'schedule.reason.already-correct': 'it is already in the right state',
   'schedule.reason.idle-until-requested': 'it was stopped for being idle, and waits for a request',
   'schedule.reason.manual-start': 'you started it by hand and have not used it yet',
+  'schedule.reason.serving-requests': 'it is answering a request right now',
   'schedule.reason.starting': 'it is still starting',
 
   'cost.title': 'Spending',

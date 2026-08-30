@@ -33,6 +33,8 @@ export class Scheduler {
     private readonly spend: SpendTracker,
     private readonly notifier: NotificationSink,
     private readonly log: Logger,
+    /** How many gateway requests are being served right now. */
+    private readonly inFlight: () => number = () => 0,
   ) {}
 
   start(): void {
@@ -220,6 +222,7 @@ export class Scheduler {
       idleStoppedAt: idleStop?.stoppedAt ? new Date(idleStop.stoppedAt) : null,
       engineReady: false,
       startedManually: (startedBy?.startedBy ?? 'user') === 'user',
+      inFlightRequests: this.inFlight(),
     }
   }
 

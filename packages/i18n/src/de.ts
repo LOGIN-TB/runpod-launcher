@@ -162,6 +162,7 @@ export const de = {
   'schedule.reason.already-correct': 'der Zustand stimmt bereits',
   'schedule.reason.idle-until-requested': 'er wurde wegen Leerlauf gestoppt und wartet auf eine Anfrage',
   'schedule.reason.manual-start': 'du hast ihn selbst gestartet und noch nicht benutzt',
+  'schedule.reason.serving-requests': 'er beantwortet gerade eine Anfrage',
   'schedule.reason.starting': 'er startet noch',
 
   'cost.title': 'Ausgaben',

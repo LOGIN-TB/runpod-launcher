@@ -23,6 +23,14 @@ export type PodResolution =
   | { state: 'ready'; pod: ActivePod }
   | { state: 'starting' }
   | { state: 'none' }
+  /**
+   * A pod could be started, but the template's own schedule says not now.
+   *
+   * Without this the two features cancel each other out: the schedule stops the
+   * pod at closing time and the next client request immediately rents another.
+   * Observed — stopped at 21:30:19, replaced at 21:30:21.
+   */
+  | { state: 'outside-hours'; window: string }
 
 export interface GatewayDeps {
   /**
@@ -51,6 +59,8 @@ export interface GatewayDeps {
     durationMs: number
   }): void
   wakeWaitSeconds(): number
+  /** Wraps the work of serving one request, so it can be counted. */
+  track<T>(work: () => Promise<T>): Promise<T>
 }
 
 const BEARER = /^Bearer\s+(.+)$/i
@@ -92,9 +102,15 @@ export async function registerGatewayRoutes(app: FastifyInstance, deps: GatewayD
     })
   })
 
-  app.post('/v1/chat/completions', (request, reply) => proxy(request, reply, 'chat', '/v1/chat/completions'))
-  app.post('/v1/completions', (request, reply) => proxy(request, reply, 'chat', '/v1/completions'))
-  app.post('/v1/embeddings', (request, reply) => proxy(request, reply, 'embedding', '/v1/embeddings'))
+  app.post('/v1/chat/completions', (request, reply) =>
+    deps.track(() => proxy(request, reply, 'chat', '/v1/chat/completions')),
+  )
+  app.post('/v1/completions', (request, reply) =>
+    deps.track(() => proxy(request, reply, 'chat', '/v1/completions')),
+  )
+  app.post('/v1/embeddings', (request, reply) =>
+    deps.track(() => proxy(request, reply, 'embedding', '/v1/embeddings')),
+  )
 
   async function proxy(
     request: FastifyRequest,
@@ -123,6 +139,10 @@ export async function registerGatewayRoutes(app: FastifyInstance, deps: GatewayD
 
     if (resolution.state === 'none') {
       await reply.code(503).send(errors.noPod())
+      return
+    }
+    if (resolution.state === 'outside-hours') {
+      await reply.code(503).send(errors.outsideHours(resolution.window))
       return
     }
     if (resolution.state === 'starting') {

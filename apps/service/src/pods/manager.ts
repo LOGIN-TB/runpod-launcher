@@ -15,6 +15,15 @@ const READY_POLL_MS = 5_000
  */
 const READY_CACHE_MS = 10_000
 
+/**
+ * Who asked for a pod.
+ *
+ * `user` is a person at the keyboard, whose instruction outranks the schedule
+ * until the pod has been used. `client` is wake-on-request, which must not —
+ * otherwise a woken pod outlives the hours the schedule was given.
+ */
+export type PodOrigin = 'user' | 'scheduler' | 'client'
+
 export interface PodRecord {
   id: string
   templateId: string
@@ -63,7 +72,7 @@ export interface PodStatusReport {
  */
 export class PodManager {
   private startInFlight: Promise<PodRecord> | null = null
-  private startedBy: 'user' | 'scheduler' = 'user'
+  private startedBy: PodOrigin = 'user'
   private readyCache: { base: string; ready: boolean; at: number } | null = null
 
   constructor(
@@ -147,7 +156,7 @@ export class PodManager {
   }
 
   /** Creates a pod for a template, or resumes the stopped one it already has. */
-  async start(template: Template, startedBy: 'user' | 'scheduler' = 'user'): Promise<PodRecord> {
+  async start(template: Template, startedBy: PodOrigin = 'user'): Promise<PodRecord> {
     this.startedBy = startedBy
     // Collapse concurrent starts: several client requests arriving at once
     // while the pod sleeps must not each rent a GPU.

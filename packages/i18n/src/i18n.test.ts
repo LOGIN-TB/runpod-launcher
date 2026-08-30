@@ -84,6 +84,7 @@ test('every reason the scheduler can give has a message in both locales', () => 
     'starting',
     'idle-until-requested',
     'manual-start',
+    'serving-requests',
   ]
   for (const reason of reasons) {
     const key = `schedule.reason.${reason}` as keyof typeof en

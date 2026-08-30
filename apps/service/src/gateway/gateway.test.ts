@@ -9,6 +9,7 @@ const deps = (overrides: Partial<GatewayDeps> = {}): GatewayDeps => ({
   authenticateClient: async (token) => (token === 'good' ? { id: 'c1', name: 'client' } : null),
   recordUsage: () => {},
   wakeWaitSeconds: () => 60,
+  track: (work: () => Promise<unknown>) => work(),
   ...overrides,
 }) as GatewayDeps
 
@@ -194,4 +195,53 @@ test('a genuine 404 from the engine is passed through unchanged', async () => {
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+test('a request outside the scheduled hours is refused, not answered with a new GPU', async () => {
+  // The two features cancelled each other out: the schedule stopped the pod at
+  // 21:30:19 and the next request from the same agent rented another at
+  // 21:30:21. The schedule then saves nothing and costs a broken task.
+  const server = await app(
+    deps({ resolvePod: async () => ({ state: 'outside-hours', window: '07:00–21:00 Europe/Berlin' }) }),
+  )
+  const response = await server.inject({
+    method: 'POST',
+    url: '/v1/chat/completions',
+    headers: { authorization: 'Bearer good' },
+    payload: { model: 'm', messages: [] },
+  })
+
+  assert.equal(response.statusCode, 503)
+  const payload = body(response) as { error: { code: string; message: string } }
+  assert.equal(payload.error.code, 'outside_scheduled_hours')
+  assert.match(payload.error.message, /07:00–21:00/)
+  assert.match(payload.error.message, /start it from the launcher app/i)
+})
+
+test('requests are counted while they are being served', async () => {
+  // The scheduler reads this to decide whether stopping would cut somebody off.
+  let peak = 0
+  let current = 0
+  const server = await app(
+    deps({
+      resolvePod: async () => ({ state: 'none' }),
+      track: async (work) => {
+        current += 1
+        peak = Math.max(peak, current)
+        try {
+          return await work()
+        } finally {
+          current -= 1
+        }
+      },
+    }),
+  )
+  await server.inject({
+    method: 'POST',
+    url: '/v1/chat/completions',
+    headers: { authorization: 'Bearer good' },
+    payload: { model: 'm', messages: [] },
+  })
+  assert.equal(peak, 1)
+  assert.equal(current, 0, 'and released afterwards')
 })

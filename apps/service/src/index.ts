@@ -15,6 +15,8 @@ import { HuggingFaceClient } from './models/huggingface.js'
 import { SpendTracker } from './scheduler/spend.js'
 import { Notifier } from './scheduler/notify.js'
 import { Scheduler } from './scheduler/scheduler.js'
+import { InFlight } from './gateway/inflight.js'
+import { isInsideWindow } from './scheduler/decide.js'
 
 const config = loadConfig()
 const app = Fastify({
@@ -49,7 +51,10 @@ const pairing = new PairingService(db, tokens, config.pairingCode ?? generatePai
 const huggingface = new HuggingFaceClient(() => settings.secret('huggingfaceToken'))
 const spend = new SpendTracker(db, requireRunpodKey, () => settings.read().timezone)
 const notifier = new Notifier(settings, app.log)
-const scheduler = new Scheduler(db, settings, pods, spend, notifier, app.log)
+// Counts requests in flight, so the scheduler does not stop a pod in the
+// middle of generating an answer somebody is waiting for.
+const inFlight = new InFlight()
+const scheduler = new Scheduler(db, settings, pods, spend, notifier, app.log, () => inFlight.count)
 
 // The desktop app's webview has its own origin, so every call it makes is
 // cross-origin. Without this the app cannot reach the service at all.
@@ -87,10 +92,21 @@ await registerGatewayRoutes(app, {
     const template = pods.wakeTarget()
     if (!template) return { state: 'none' }
 
+    // But not against the template's own schedule. Waking a pod the schedule
+    // has just stopped makes the schedule meaningless and rents hardware
+    // nobody agreed to: seen live, stopped at 21:30:19 and replaced two
+    // seconds later by the next request from the same agent.
+    const schedule = template.schedule
+    if (schedule.enabled && schedule.startAt && schedule.stopAt && !isInsideWindow(schedule, new Date())) {
+      return { state: 'outside-hours', window: `${schedule.startAt}–${schedule.stopAt} ${schedule.timezone}` }
+    }
+
     const waitSeconds = settings.read().wakeWaitSeconds
     if (!wait || waitSeconds === 0) return { state: 'starting' }
 
-    const record = await pods.start(template)
+    // Recorded as a client wake, not a person at the keyboard: the manual-start
+    // exception must not apply here, or a woken pod would outlive the schedule.
+    const record = await pods.start(template, 'client')
     // Waits for the engine to answer, not just for RunPod to schedule the
     // container — those are minutes apart, and the gap is exactly where a
     // client would get a bare 404 from a port nothing is listening on.
@@ -114,6 +130,7 @@ await registerGatewayRoutes(app, {
     ).run(new Date().toISOString(), entry.tokenId, entry.model, entry.endpoint, entry.durationMs)
   },
   wakeWaitSeconds: () => settings.read().wakeWaitSeconds,
+  track: (work) => inFlight.track(work),
 })
 
 await registerAdminRoutes(app, { db, settings, tokens, pods, pairing, requireRunpodKey, huggingface, spend, scheduler })
