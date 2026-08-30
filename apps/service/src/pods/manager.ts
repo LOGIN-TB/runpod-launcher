@@ -1,4 +1,4 @@
-import { templateSchema, type Template, type runpod } from '@runpod-launcher/shared'
+import { POD_PORTS, templateSchema, type Template, type runpod } from '@runpod-launcher/shared'
 import type { Db } from '../store/db.js'
 import { generateToken } from '../store/crypto.js'
 import { podProxyUrl, RunpodClient, RunpodError } from '../runpod/client.js'
@@ -12,6 +12,36 @@ export interface PodRecord {
   templateId: string
   status: runpod.PodStatus
   costPerHour: number
+}
+
+/**
+ * How far along a pod is, in terms someone waiting can act on.
+ *
+ * RunPod's own status jumps to RUNNING within seconds while the engine is
+ * still fetching twenty gigabytes, and stays RUNNING whether the engine came
+ * up or died. Reported live on 2026-08-30: eleven minutes of an apparently
+ * running pod with no way to tell downloading from broken.
+ */
+export type Readiness =
+  | 'provisioning' // RunPod has not placed it yet
+  | 'preparing' // container up, engine still fetching or loading the model
+  | 'ready' // the engine answers
+  | 'failed' // the engine keeps exiting
+  | 'stopped'
+
+export interface PodStatusReport {
+  id: string
+  templateId: string
+  templateName: string | null
+  runpodStatus: runpod.PodStatus
+  readiness: Readiness
+  costPerHour: number
+  /** Seconds since the pod was started, so a long wait is visible as one. */
+  runningForSeconds: number | null
+  /** Set when readiness is 'failed'. */
+  detail: string | null
+  gpu: string | null
+  isActive: boolean
 }
 
 /**
@@ -335,6 +365,99 @@ export class PodManager {
       await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS))
     }
     return null
+  }
+
+  /**
+   * Every pod this launcher knows about, with how far along each one is.
+   *
+   * Taken from RunPod rather than from our own table: a pod started here and
+   * then left behind still costs money, and one that is invisible cannot be
+   * stopped.
+   */
+  async listAll(): Promise<PodStatusReport[]> {
+    const live = await this.runpod()
+      .listPods()
+      .then((result) => result.pods)
+      .catch(() => [])
+
+    const known = this.db
+      .prepare('SELECT id, template_id AS templateId, started_at AS startedAt FROM pods')
+      .all() as Array<{ id: string; templateId: string | null; startedAt: string | null }>
+    const byId = new Map(known.map((row) => [row.id, row]))
+    const currentId = this.current()?.id ?? null
+
+    const names = new Map(
+      (this.db.prepare('SELECT id, name FROM templates').all() as Array<{ id: string; name: string }>).map(
+        (row) => [row.id, row.name],
+      ),
+    )
+
+    return Promise.all(
+      live.map(async (pod) => {
+        const record = byId.get(pod.id)
+        const readiness = await this.readinessOf(pod)
+        const startedAt = pod.startedAt ?? record?.startedAt ?? null
+        return {
+          id: pod.id,
+          templateId: record?.templateId ?? '',
+          templateName: record?.templateId ? (names.get(record.templateId) ?? null) : null,
+          runpodStatus: pod.status,
+          readiness: readiness.state,
+          costPerHour: pod.cost,
+          runningForSeconds: startedAt ? Math.round((Date.now() - new Date(startedAt).getTime()) / 1000) : null,
+          detail: readiness.detail,
+          gpu: pod.gpu?.id ?? null,
+          isActive: pod.id === currentId,
+        }
+      }),
+    )
+  }
+
+  /** Asks the pod's own engine whether it is serving yet. */
+  private async readinessOf(pod: runpod.Pod): Promise<{ state: Readiness; detail: string | null }> {
+    if (pod.status === 'PROVISIONING' || pod.status === 'STARTING') {
+      return { state: 'provisioning', detail: null }
+    }
+    if (pod.status !== 'RUNNING') return { state: 'stopped', detail: null }
+
+    for (const port of [POD_PORTS.chat, POD_PORTS.embedding]) {
+      try {
+        const response = await fetch(`${podProxyUrl(pod.id, port)}/health`, {
+          signal: AbortSignal.timeout(4_000),
+        })
+        if (response.ok) return { state: 'ready', detail: null }
+      } catch {
+        // Still coming up, or this port is not in use by this template.
+      }
+    }
+
+    if (await this.engineIsCrashLooping(pod.id)) {
+      return {
+        state: 'failed',
+        detail: 'The engine keeps exiting on startup. Check the pod log — usually a wrong argument or a model it cannot load.',
+      }
+    }
+    return { state: 'preparing', detail: null }
+  }
+
+  /** Stops or terminates any pod, not only the active one. */
+  async act(podId: string, action: 'stop' | 'terminate', reason = 'manual'): Promise<void> {
+    await this.runpod().podAction(podId, action)
+    this.markStopped(podId, reason)
+  }
+
+  /** Makes an existing pod the one the gateway routes to. */
+  select(podId: string): boolean {
+    const row = this.db.prepare('SELECT id FROM pods WHERE id = ?').get(podId) as { id: string } | undefined
+    if (!row) return false
+    // One pod serves at a time; the others are marked stopped locally so the
+    // gateway has an unambiguous target.
+    this.db.prepare("UPDATE pods SET stopped_at = COALESCE(stopped_at, ?) WHERE id != ?").run(
+      new Date().toISOString(),
+      podId,
+    )
+    this.db.prepare('UPDATE pods SET stopped_at = NULL WHERE id = ?').run(podId)
+    return true
   }
 
   /** Describes the running pod to the gateway, or null when nothing serves. */

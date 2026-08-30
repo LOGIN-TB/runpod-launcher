@@ -97,6 +97,36 @@ export interface ScheduleAction {
   because: string
 }
 
+export type Readiness = 'provisioning' | 'preparing' | 'ready' | 'failed' | 'stopped'
+
+export interface PodStatusReport {
+  id: string
+  templateId: string
+  templateName: string | null
+  runpodStatus: string
+  readiness: Readiness
+  costPerHour: number
+  runningForSeconds: number | null
+  detail: string | null
+  gpu: string | null
+  isActive: boolean
+}
+
+export interface SelfTestResult {
+  ok: boolean
+  status?: number
+  durationMs?: number
+  reason?: string
+  detail?: string
+}
+
+export interface ActivityEvent {
+  at: string
+  by: 'schedule' | 'you'
+  action: string
+  detail: Record<string, unknown> | null
+}
+
 export interface ClientToken {
   id: string
   name: string
@@ -134,6 +164,14 @@ export const api = {
   startPod: (c: Connection, templateId: string) =>
     request<{ id: string }>(c, '/pod/start', { method: 'POST', body: JSON.stringify({ templateId }) }),
   stopPod: (c: Connection) => request<{ stopped: string | null }>(c, '/pod/stop', { method: 'POST', body: '{}' }),
+
+  pods: (c: Connection) => request<{ pods: PodStatusReport[] }>(c, '/pods'),
+  activity: (c: Connection) => request<{ events: ActivityEvent[] }>(c, '/activity'),
+  stopOnePod: (c: Connection, id: string) => request<unknown>(c, `/pods/${id}/stop`, { method: 'POST', body: '{}' }),
+  deletePod: (c: Connection, id: string) => request<void>(c, `/pods/${id}`, { method: 'DELETE' }),
+  selectPod: (c: Connection, id: string) => request<unknown>(c, `/pods/${id}/select`, { method: 'POST', body: '{}' }),
+  selfTest: (c: Connection) => request<SelfTestResult>(c, '/pod/selftest', { method: 'POST', body: '{}' }),
+  deleteTemplate: (c: Connection, id: string) => request<void>(c, `/templates/${id}`, { method: 'DELETE' }),
 
   gpus: (c: Connection) => request<{ gpus: GpuType[] }>(c, '/catalog/gpus'),
 

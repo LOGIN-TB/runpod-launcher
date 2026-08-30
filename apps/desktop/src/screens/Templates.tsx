@@ -18,6 +18,21 @@ export function Templates({
 }): ReactNode {
   const { t } = useI18n()
   const [editing, setEditing] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const act = async (id: string, fn: () => Promise<unknown>): Promise<void> => {
+    setBusy(id)
+    setError(null)
+    try {
+      await fn()
+      onChanged()
+    } catch (cause) {
+      setError((cause as Error).message)
+    } finally {
+      setBusy(null)
+    }
+  }
 
   if (editing) {
     return (
@@ -41,6 +56,12 @@ export function Templates({
         </Button>
       </div>
 
+      {error ? (
+        <p className="field-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+
       {templates.length === 0 ? (
         <Card>
           <EmptyState title={t('template.none')} hint={t('template.noneHint')} />
@@ -52,16 +73,42 @@ export function Templates({
               <div>
                 <strong>{template.name}</strong>
                 <p className="muted small">
-                  {[template.chatModel?.repoId, template.embeddingModel?.repoId].filter(Boolean).join(' + ')}
+                  {[template.chatModel, template.embeddingModel]
+                    .filter((slot) => slot !== null)
+                    .map((slot) => (slot.quantisation ? `${slot.repoId}:${slot.quantisation}` : slot.repoId))
+                    .join(' + ')}
                 </p>
+                <div className="row">
+                  <Badge tone="neutral">{template.gpuTypeId}</Badge>
+                  <Badge tone={template.lifecycleMode === 'stopResume' ? 'running' : 'pending'}>
+                    {template.lifecycleMode === 'stopResume'
+                      ? t('template.sleepStopResume')
+                      : t('template.sleepRecreate')}
+                  </Badge>
+                  {template.schedule.enabled ? <Badge tone="neutral">{t('schedule.title')}</Badge> : null}
+                </div>
               </div>
-              <div className="row">
-                <Badge tone="neutral">{template.gpuTypeId}</Badge>
-                <Badge tone={template.lifecycleMode === 'stopResume' ? 'running' : 'pending'}>
-                  {template.lifecycleMode === 'stopResume'
-                    ? t('template.sleepStopResume')
-                    : t('template.sleepRecreate')}
-                </Badge>
+
+              {/* A list you can only look at is not a list of anything. */}
+              <div className="pod-actions">
+                <Button
+                  variant="primary"
+                  loading={busy === template.id}
+                  onClick={() => act(template.id, () => api.startPod(connection, template.id))}
+                >
+                  {t('pod.start')}
+                </Button>
+                <Button
+                  variant="danger"
+                  loading={busy === template.id}
+                  onClick={() => {
+                    if (confirm(t('template.deleteConfirm', { name: template.name }))) {
+                      void act(template.id, () => api.deleteTemplate(connection, template.id))
+                    }
+                  }}
+                >
+                  {t('action.delete')}
+                </Button>
               </div>
             </div>
           </Card>

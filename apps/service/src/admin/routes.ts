@@ -274,6 +274,142 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps)
     }
   })
 
+  /**
+   * What has happened recently, and who did it.
+   *
+   * The log has existed since the first commit and was never shown, so a pod
+   * that the scheduler stopped for being outside its hours looked to the user
+   * like a pod that had failed for no reason.
+   */
+  app.get('/activity', async (request, reply) => {
+    if (!(await requireDevice(request, reply))) return
+    const rows = db
+      .prepare('SELECT at, actor, action, detail FROM audit_log ORDER BY id DESC LIMIT 30')
+      .all() as Array<{ at: string; actor: string; action: string; detail: string | null }>
+
+    return reply.send({
+      events: rows.map((row) => ({
+        at: row.at,
+        // Only whether it was the schedule or a person — device ids mean
+        // nothing to the person reading.
+        by: row.actor === 'scheduler' ? 'schedule' : 'you',
+        action: row.action,
+        detail: row.detail ? (JSON.parse(row.detail) as Record<string, unknown>) : null,
+      })),
+    })
+  })
+
+  /** Every pod, with how far along each one is. */
+  app.get('/pods', async (request, reply) => {
+    if (!(await requireDevice(request, reply))) return
+    try {
+      return reply.send({ pods: await pods.listAll() })
+    } catch (error) {
+      return reply.code(502).send({ error: (error as Error).message })
+    }
+  })
+
+  /** Pause a specific pod. It keeps its disk and can be resumed. */
+  app.post('/pods/:id/stop', async (request, reply) => {
+    const device = await requireDevice(request, reply)
+    if (!device) return
+    const { id } = request.params as { id: string }
+    try {
+      await pods.act(id, 'stop')
+      audit(device.id, 'pod.stop', { podId: id }, request.ip)
+      return reply.send({ stopped: id })
+    } catch (error) {
+      return reply.code(502).send({ error: (error as Error).message })
+    }
+  })
+
+  /**
+   * Delete a pod for good.
+   *
+   * Separate from stopping on purpose: a stopped pod still bills for its disk,
+   * so the difference between the two is money, and the interface should not
+   * blur it.
+   */
+  app.delete('/pods/:id', async (request, reply) => {
+    const device = await requireDevice(request, reply)
+    if (!device) return
+    const { id } = request.params as { id: string }
+    try {
+      await pods.act(id, 'terminate', 'deleted')
+      audit(device.id, 'pod.terminate', { podId: id }, request.ip)
+      return reply.code(204).send()
+    } catch (error) {
+      return reply.code(502).send({ error: (error as Error).message })
+    }
+  })
+
+  /** Route the gateway at a different existing pod. */
+  app.post('/pods/:id/select', async (request, reply) => {
+    const device = await requireDevice(request, reply)
+    if (!device) return
+    const { id } = request.params as { id: string }
+    if (!pods.select(id)) return reply.code(404).send({ error: 'Unknown pod' })
+    audit(device.id, 'pod.select', { podId: id }, request.ip)
+    return reply.send({ selected: id })
+  })
+
+  /**
+   * Sends a real request to the active pod and reports what came back.
+   *
+   * "Running" is not the same as "working": the engine can be up and still
+   * refuse every request. This is the only check that answers the question the
+   * user is actually asking.
+   */
+  app.post('/pod/selftest', async (request, reply) => {
+    if (!(await requireDevice(request, reply))) return
+    const serving = pods.describe()
+    if (!serving) return reply.send({ ok: false, reason: 'no-pod' })
+
+    const target = serving.chatUrl ?? serving.embeddingUrl
+    const model = serving.servedModels[0]
+    if (!target || !model) return reply.send({ ok: false, reason: 'no-endpoint' })
+
+    const isChat = serving.chatUrl !== null
+    const startedAt = Date.now()
+    try {
+      const response = await fetch(`${target}${isChat ? '/v1/chat/completions' : '/v1/embeddings'}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${serving.podApiKey}` },
+        body: JSON.stringify(
+          isChat
+            ? { model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 }
+            : { model, input: 'ping' },
+        ),
+        signal: AbortSignal.timeout(60_000),
+      })
+      const body = await response.text()
+      return reply.send({
+        ok: response.ok,
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+        ...(response.ok ? {} : { detail: body.slice(0, 300) }),
+      })
+    } catch (error) {
+      return reply.send({ ok: false, reason: 'unreachable', detail: (error as Error).message })
+    }
+  })
+
+  app.delete('/templates/:id', async (request, reply) => {
+    const device = await requireDevice(request, reply)
+    if (!device) return
+    const { id } = request.params as { id: string }
+
+    // Refuse while it is in use rather than leaving a running pod with no
+    // template behind it — that pod would still bill and could not be resumed.
+    const active = pods.current()
+    if (active?.templateId === id) {
+      return reply.code(409).send({ error: 'This template has a pod running. Stop the pod first.' })
+    }
+    db.prepare('DELETE FROM templates WHERE id = ?').run(id)
+    audit(device.id, 'template.deleted', { id }, request.ip)
+    return reply.code(204).send()
+  })
+
   app.get('/pod', async (request, reply) => {
     if (!(await requireDevice(request, reply))) return
     const serving = pods.describe()

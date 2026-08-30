@@ -13,7 +13,7 @@ test('no message is left in English by accident in the German locale', () => {
   // Proper nouns and words that are genuinely identical in both languages.
   // Keep this list short: each entry is a translation that will never be
   // checked again, so anything added here should be obviously untranslatable.
-  const allowed = new Set(['app.name', 'template.name'])
+  const allowed = new Set(['app.name', 'template.name', 'pods.title'])
   const identical = (Object.keys(en) as Array<keyof typeof en>).filter(
     (key) => !allowed.has(key) && en[key] === de[key],
   )

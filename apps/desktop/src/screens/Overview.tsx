@@ -6,6 +6,8 @@ import { Badge, Button, Card, EmptyState } from '../components/primitives.js'
 import { CopyField } from '../components/CopyField.js'
 import { setTrayStatus } from '../lib/storage.js'
 import { SpendPanel } from '../components/SpendPanel.js'
+import { PodList } from '../components/PodList.js'
+import { Activity } from '../components/Activity.js'
 
 const POLL_MS = 5_000
 
@@ -111,7 +113,6 @@ export function Overview({
             className="input"
             value={selected}
             onChange={(event) => setSelected(event.target.value)}
-            disabled={isRunning || isStarting}
             aria-label={t('template.title')}
           >
             {templates.map((template) => (
@@ -144,7 +145,13 @@ export function Overview({
         ) : null}
       </Card>
 
+      {/* Every pod, with what it is doing and how to stop it. */}
+      <PodList connection={connection} />
+
       <SpendPanel connection={connection} />
+
+      {/* Why anything changed, which the audit log knew all along. */}
+      <Activity connection={connection} />
 
       {view?.serving?.chatUrl || view?.serving?.embeddingUrl ? (
         <Card>

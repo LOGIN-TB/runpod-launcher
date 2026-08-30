@@ -249,3 +249,18 @@
 .hit-meta { display: flex; gap: var(--space-2); align-items: center; white-space: nowrap; }
 .model-results code { overflow: hidden; text-overflow: ellipsis; }
 .engine-note { padding: var(--space-2) var(--space-3); background: var(--bg-sunken); border-radius: var(--radius); }
+
+/* --- pod list --- */
+.pod-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.pod {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-4);
+  padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.pod.active { border-color: var(--accent); background: var(--accent-subtle); }
+.pod-main { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.pod-actions { display: flex; gap: var(--space-2); flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+.verdict.verdict-ok, .verdict.verdict-bad { display: block; }
+
+.activity { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--text-sm); }
+.activity li { display: flex; gap: var(--space-3); align-items: baseline; }
+.activity li span:first-child { flex-shrink: 0; font-variant-numeric: tabular-nums; }
