@@ -90,6 +90,10 @@ const MIGRATIONS: readonly string[] = [
   // unable to talk to a pod that was still running and still being billed —
   // invisible to the gateway until somebody noticed the charge.
   `ALTER TABLE pods ADD COLUMN api_key TEXT;`,
+  // Who asked for this pod. A person clicking "create pod" is giving an
+  // instruction for now; the schedule is for when nobody is watching, and it
+  // should not overrule the person who is.
+  `ALTER TABLE pods ADD COLUMN started_by TEXT NOT NULL DEFAULT 'user';`,
 ]
 
 export function openDatabase(path: string): Db {

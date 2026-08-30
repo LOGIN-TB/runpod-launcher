@@ -139,7 +139,7 @@ export class Scheduler {
     }
 
     try {
-      const record = await this.pods.start(template)
+      const record = await this.pods.start(template, 'scheduler')
       await this.notifier.send({
         kind: 'pod-started',
         message: `Started ${template.name} at $${record.costPerHour.toFixed(2)}/h.`,
@@ -203,6 +203,10 @@ export class Scheduler {
       .prepare('SELECT at FROM usage ORDER BY id DESC LIMIT 1')
       .get() as { at: string } | undefined
 
+    const startedBy = this.db
+      .prepare('SELECT started_by AS startedBy FROM pods WHERE id = ?')
+      .get(record?.id ?? '') as { startedBy: string } | undefined
+
     const idleStop = this.db
       .prepare(
         "SELECT stopped_at AS stoppedAt FROM pods WHERE stop_reason = 'idle-timeout' ORDER BY stopped_at DESC LIMIT 1",
@@ -215,6 +219,7 @@ export class Scheduler {
       lastRequestAt: lastRequest ? new Date(lastRequest.at) : null,
       idleStoppedAt: idleStop?.stoppedAt ? new Date(idleStop.stoppedAt) : null,
       engineReady: false,
+      startedManually: (startedBy?.startedBy ?? 'user') === 'user',
     }
   }
 

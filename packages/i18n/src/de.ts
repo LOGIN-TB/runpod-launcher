@@ -48,6 +48,7 @@ export const de = {
   'pod.costToday': 'Heute',
   'pod.costPerHour': '{amount} pro Stunde',
   'pod.uptime': 'Läuft seit {duration}',
+  'pod.windowClosingSoon': 'Der Zeitplan dieser Vorlage endet in {minutes} Minuten. Ein erster Start lädt länger als das, der Zeitplan stoppt ihn also wieder, sobald du ihn einmal benutzt hast.',
   'pod.endpoint': 'Adresse für deine Clients',
 
   'activity.title': 'Was zuletzt passiert ist',
@@ -154,6 +155,7 @@ export const de = {
   'schedule.reason.schedule-disabled': 'es ist kein Zeitplan gesetzt',
   'schedule.reason.already-correct': 'der Zustand stimmt bereits',
   'schedule.reason.idle-until-requested': 'er wurde wegen Leerlauf gestoppt und wartet auf eine Anfrage',
+  'schedule.reason.manual-start': 'du hast ihn selbst gestartet und noch nicht benutzt',
   'schedule.reason.starting': 'er startet noch',
 
   'cost.title': 'Ausgaben',

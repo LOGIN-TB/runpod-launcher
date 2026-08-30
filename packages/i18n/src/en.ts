@@ -43,6 +43,7 @@ export const en = {
   'pod.costToday': 'Today',
   'pod.costPerHour': '{amount} per hour',
   'pod.uptime': 'Running for {duration}',
+  'pod.windowClosingSoon': 'This template’s schedule ends in {minutes} minutes. A first start takes longer than that to load, so the schedule will stop it again as soon as you have used it once.',
   'pod.endpoint': 'Endpoint for your clients',
 
   'activity.title': 'Recent activity',
@@ -149,6 +150,7 @@ export const en = {
   'schedule.reason.schedule-disabled': 'no schedule is set',
   'schedule.reason.already-correct': 'it is already in the right state',
   'schedule.reason.idle-until-requested': 'it was stopped for being idle, and waits for a request',
+  'schedule.reason.manual-start': 'you started it by hand and have not used it yet',
   'schedule.reason.starting': 'it is still starting',
 
   'cost.title': 'Spending',

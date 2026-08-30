@@ -24,6 +24,7 @@ export type Reason =
   | 'already-correct'
   | 'starting'
   | 'idle-until-requested'
+  | 'manual-start'
 
 export interface PodState {
   status: 'RUNNING' | 'STARTING' | 'PROVISIONING' | 'EXITED' | 'ERROR' | 'TERMINATED' | null
@@ -37,6 +38,15 @@ export interface PodState {
    * that as idle time bills for the download and then throws it away.
    */
   engineReady: boolean
+  /**
+   * True when a person started this pod rather than the schedule.
+   *
+   * Someone who clicks "create pod" wants it now. Observed: a pod created by
+   * hand at 20:48 was stopped by the schedule at 21:00, still loading, having
+   * never answered a request — thirteen minutes of download paid for and
+   * discarded.
+   */
+  startedManually: boolean
   /**
    * When the pod was last stopped for being idle, if it was.
    *
@@ -120,7 +130,16 @@ export function decide(args: {
     return { do: 'start', because: 'inside-schedule' }
   }
 
-  if (!wanted && isUp) return { do: 'stop', because: 'outside-schedule' }
+  if (!wanted && isUp) {
+    // A manual start outranks the schedule until the pod has actually been
+    // used. The idle rule above still ends it once it goes quiet, and spend
+    // limits still stop it at any time — this only prevents the schedule from
+    // discarding something a person deliberately asked for and cannot yet use.
+    if (pod.startedManually && !hasBeenUsed(pod)) {
+      return { do: 'nothing', because: 'manual-start' }
+    }
+    return { do: 'stop', because: 'outside-schedule' }
+  }
   return { do: 'nothing', because: 'already-correct' }
 }
 
@@ -194,6 +213,10 @@ export function windowOpenedAt(schedule: Template['schedule'], now: Date): Date 
 
   return new Date(now.getTime() - minutesSinceOpen * 60_000)
 }
+
+/** Has any request reached this pod since it started? */
+const hasBeenUsed = (pod: PodState): boolean =>
+  pod.lastRequestAt !== null && pod.startedAt !== null && pod.lastRequestAt > pod.startedAt
 
 const laterOf = (a: Date | null, b: Date | null): Date | null => {
   if (!a) return b

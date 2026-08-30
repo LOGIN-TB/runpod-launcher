@@ -29,6 +29,9 @@ const pod = (overrides: Partial<PodState> = {}): PodState => ({
   lastRequestAt: new Date('2026-09-01T06:00:00Z'),
   idleStoppedAt: null,
   engineReady: true,
+  // Most tests are about the schedule acting on its own; the manual-start
+  // exception has its own cases below.
+  startedManually: false,
   ...overrides,
 })
 
@@ -308,4 +311,74 @@ test('a spend limit still stops a pod that is not ready yet', () => {
     now: at('2026-09-01T06:01:00Z'),
   })
   assert.equal(action.because, 'daily-limit')
+})
+
+test('a pod somebody started by hand is not taken away before they can use it', () => {
+  // Observed: created at 20:48, stopped by the schedule at 21:00 while still
+  // loading, never having answered a request. Thirteen minutes of download
+  // paid for and discarded.
+  const action = decide({
+    template: template(), // window closes at 19:00 Berlin
+    pod: pod({
+      startedManually: true,
+      engineReady: false,
+      startedAt: at('2026-09-01T17:50:00Z'),
+      lastRequestAt: null,
+    }),
+    spend: noLimits,
+    now: at('2026-09-01T18:00:00Z'),
+  })
+  assert.deepEqual(action, { do: 'nothing', because: 'manual-start' })
+})
+
+test('once it has been used, the schedule takes over again', () => {
+  // The exception covers "I asked for this and cannot use it yet", not "this
+  // may now run forever".
+  const action = decide({
+    template: template(),
+    pod: pod({
+      startedManually: true,
+      engineReady: true,
+      startedAt: at('2026-09-01T17:50:00Z'),
+      lastRequestAt: at('2026-09-01T17:55:00Z'),
+    }),
+    spend: noLimits,
+    now: at('2026-09-01T18:00:00Z'),
+  })
+  assert.deepEqual(action, { do: 'stop', because: 'outside-schedule' })
+})
+
+test('a pod the schedule started is stopped by the schedule, used or not', () => {
+  const action = decide({
+    template: template(),
+    pod: pod({ startedManually: false, engineReady: false, startedAt: at('2026-09-01T17:50:00Z'), lastRequestAt: null }),
+    spend: noLimits,
+    now: at('2026-09-01T18:00:00Z'),
+  })
+  assert.deepEqual(action, { do: 'stop', because: 'outside-schedule' })
+})
+
+test('a spend limit still wins over a manual start', () => {
+  const action = decide({
+    template: template(),
+    pod: pod({ startedManually: true, engineReady: false, lastRequestAt: null }),
+    spend: { todayUsd: 99, monthUsd: 99, dailyLimitUsd: 10, monthlyLimitUsd: null },
+    now: at('2026-09-01T18:00:00Z'),
+  })
+  assert.equal(action.because, 'daily-limit')
+})
+
+test('the runtime ceiling still applies to a manual start', () => {
+  const action = decide({
+    template: template({ maxRuntimeHours: 2 }),
+    pod: pod({
+      startedManually: true,
+      engineReady: false,
+      startedAt: at('2026-09-01T04:00:00Z'),
+      lastRequestAt: null,
+    }),
+    spend: noLimits,
+    now: at('2026-09-01T18:00:00Z'),
+  })
+  assert.equal(action.because, 'max-runtime')
 })

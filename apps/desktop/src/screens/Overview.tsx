@@ -30,6 +30,35 @@ export function Overview({
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<string>(templates[0]?.id ?? '')
 
+  /**
+   * Minutes until the chosen template's window closes, or null when it is not
+   * about to.
+   *
+   * Creating a pod ten minutes before the schedule shuts it down means paying
+   * for a download that is discarded — which is exactly what happened before
+   * a manual start was allowed to outrank the schedule. It is still worth
+   * saying, because the schedule will take it away as soon as it is used.
+   */
+  const closingSoon = ((): number | null => {
+    const template = templates.find((candidate) => candidate.id === selected)
+    const schedule = template?.schedule
+    if (!schedule?.enabled || !schedule.stopAt) return null
+
+    const local = new Intl.DateTimeFormat('en-GB', {
+      timeZone: schedule.timezone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(new Date())
+    const [hour = '0', minute = '0'] = local.split(':')
+    const nowMinutes = Number(hour) * 60 + Number(minute)
+    const [stopHour = '0', stopMinute = '0'] = schedule.stopAt.split(':')
+    const stopMinutes = Number(stopHour) * 60 + Number(stopMinute)
+
+    const remaining = stopMinutes - nowMinutes
+    return remaining > 0 && remaining <= 30 ? remaining : null
+  })()
+
   useEffect(() => {
     let cancelled = false
     const load = async (): Promise<void> => {
@@ -137,6 +166,10 @@ export function Overview({
             </Button>
           )}
         </div>
+
+        {closingSoon !== null && !isRunning && !isStarting ? (
+          <p className="muted small">{t('pod.windowClosingSoon', { minutes: closingSoon })}</p>
+        ) : null}
 
         {error ? (
           <p className="field-error" role="alert">

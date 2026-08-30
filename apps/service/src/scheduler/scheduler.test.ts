@@ -44,7 +44,7 @@ interface Harness {
 
 function harness(options: {
   tpl?: Template
-  pod?: { status: string; startedAt: string; rate: number }
+  pod?: { status: string; startedAt: string; rate: number; startedBy?: 'user' | 'scheduler' }
   billed?: number
   limits?: { dailyLimitUsd?: number | null }
 } = {}): Harness {
@@ -62,9 +62,18 @@ function harness(options: {
 
   if (options.pod) {
     db.prepare(
-      `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, started_at)
-       VALUES ('p1', ?, ?, ?, ?, ?)`,
-    ).run(tpl.id, options.pod.status, options.pod.rate, options.pod.startedAt, options.pod.startedAt)
+      `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, started_at, started_by)
+       VALUES ('p1', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      tpl.id,
+      options.pod.status,
+      options.pod.rate,
+      options.pod.startedAt,
+      options.pod.startedAt,
+      // Whoever started it decides whether the schedule may take it away, so
+      // the tests have to say.
+      options.pod.startedBy ?? 'scheduler',
+    )
   }
 
   const calls: string[] = []
@@ -241,4 +250,16 @@ test('a schedule created before the RunPod key still runs once the key arrives',
   const action = await scheduler.tick(insideHours)
   assert.deepEqual(action, { do: 'start', because: 'inside-schedule' })
   assert.deepEqual(calls, ['create'])
+})
+
+test('the scheduler leaves a hand-started pod alone until it has been used', async () => {
+  // End to end through the scheduler, not just the decision: a pod created by
+  // hand shortly before the window closes must survive long enough to be
+  // usable, or its download was paid for and thrown away.
+  const h = harness({
+    pod: { status: 'RUNNING', startedAt: '2026-09-01T17:50:00Z', rate: 0.99, startedBy: 'user' },
+  })
+  const action = await h.scheduler.tick(outsideHours)
+  assert.deepEqual(action, { do: 'nothing', because: 'manual-start' })
+  assert.deepEqual(h.calls, [], 'nothing was stopped')
 })

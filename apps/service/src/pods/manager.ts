@@ -55,6 +55,7 @@ export interface PodStatusReport {
  */
 export class PodManager {
   private startInFlight: Promise<PodRecord> | null = null
+  private startedBy: 'user' | 'scheduler' = 'user'
 
   constructor(
     private readonly db: Db,
@@ -137,7 +138,8 @@ export class PodManager {
   }
 
   /** Creates a pod for a template, or resumes the stopped one it already has. */
-  async start(template: Template): Promise<PodRecord> {
+  async start(template: Template, startedBy: 'user' | 'scheduler' = 'user'): Promise<PodRecord> {
+    this.startedBy = startedBy
     // Collapse concurrent starts: several client requests arriving at once
     // while the pod sleeps must not each rent a GPU.
     this.startInFlight ??= this.doStart(template).finally(() => {
@@ -542,15 +544,16 @@ export class PodManager {
     const now = new Date().toISOString()
     this.db
       .prepare(
-        `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, started_at, last_seen_at, api_key)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, started_at, last_seen_at, api_key, started_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET status = excluded.status,
                                        cost_per_hour = excluded.cost_per_hour,
                                        stopped_at = NULL,
                                        stop_reason = NULL,
                                        last_seen_at = excluded.last_seen_at,
                                        -- A resume keeps the key it was created with.
-                                       api_key = COALESCE(excluded.api_key, pods.api_key)`,
+                                       api_key = COALESCE(excluded.api_key, pods.api_key),
+                                       started_by = excluded.started_by`,
       )
       .run(
         pod.id,
@@ -561,6 +564,7 @@ export class PodManager {
         pod.startedAt ?? now,
         now,
         podApiKey === undefined ? null : this.seal.encrypt(podApiKey),
+        this.startedBy,
       )
     return { id: pod.id, templateId, status: pod.status, costPerHour: pod.cost }
   }
