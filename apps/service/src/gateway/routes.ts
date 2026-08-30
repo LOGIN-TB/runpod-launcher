@@ -164,6 +164,17 @@ export async function registerGatewayRoutes(app: FastifyInstance, deps: GatewayD
       durationMs: Date.now() - startedAt,
     })
 
+    // RunPod's proxy answers 404 while nothing is bound to the pod's port. It
+    // is indistinguishable from a real 404 at a glance, and passing it on tells
+    // the client its request was wrong when the pod was merely not up yet.
+    // Readiness is checked before forwarding, but the answer is cached for a
+    // few seconds and an engine can fall over inside that window.
+    if (upstream.status === 404 && !isEngineResponse(upstream)) {
+      reply.header('retry-after', '30')
+      await reply.code(503).send(errors.stillStarting(deps.wakeWaitSeconds()))
+      return
+    }
+
     reply.code(upstream.status)
     const contentType = upstream.headers.get('content-type')
     if (contentType) reply.header('content-type', contentType)
@@ -176,6 +187,17 @@ export async function registerGatewayRoutes(app: FastifyInstance, deps: GatewayD
     // long generations never sit idle long enough to hit a proxy timeout.
     await reply.send(upstream.body)
   }
+}
+
+/**
+ * Did this come from the inference engine, or from the proxy in front of it?
+ *
+ * An engine answers JSON. RunPod's proxy answers text or HTML when there is
+ * nothing behind the port yet, so the content type separates "your request was
+ * wrong" from "nobody is home".
+ */
+function isEngineResponse(response: Response): boolean {
+  return (response.headers.get('content-type') ?? '').includes('application/json')
 }
 
 /** Builds the per-role upstream URLs for a pod, given how it is reachable. */

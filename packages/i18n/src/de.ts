@@ -112,6 +112,8 @@ export const de = {
   'template.gpu': 'Grafikkarte',
   'template.advanced': 'Erweitert',
   'template.contextLength': 'Kontextlänge',
+  'template.contextFits': 'Auf dieser Karte ist Platz für insgesamt etwa {max} Token Kontext.',
+  'template.contextTooLarge': 'Das verlangt {asked} Token Kontext; auf diese Karte passen etwa {max}. Der Motor würde erst nach dem Download scheitern.',
   'template.contextLengthHint': 'Wie viel Gespräch eine einzelne Anfrage mitbringen darf. Agenten brauchen viel: ein Coding-Assistent schickt in der ersten Nachricht schon mal zwanzigtausend Token.',
   'template.concurrency': 'Gleichzeitige Anfragen',
   'template.concurrencyHint.vllm': 'Wie viele Anfragen parallel laufen dürfen. Hybrid-Modelle brauchen je einen Cache-Block, und vLLMs Vorgabe von 256 passt nicht immer.',

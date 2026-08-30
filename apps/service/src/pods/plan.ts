@@ -74,6 +74,18 @@ function addSlot(env: Record<string, string>, prefix: 'CHAT' | 'EMBED', slot: Mo
 }
 
 /**
+ * Context across all slots, for engines that share one budget.
+ *
+ * Not simply window x slots: nothing stopped a template asking for the model's
+ * native 262,144-token window across four slots, which is a million tokens of
+ * cache and fits on no card sold. llama.cpp would have failed to allocate after
+ * downloading twenty-nine gigabytes.
+ */
+export function totalContextFor(template: Template): number {
+  return (template.maxModelLen ?? 8192) * (template.maxConcurrentSequences ?? 1)
+}
+
+/**
  * Fills placeholders in a template's `args`. The pod API key is substituted
  * here rather than stored, so it never lands in the template record.
  */
@@ -103,7 +115,7 @@ export function renderArgs(args: string, context: {
      * and every agent failed with "request exceeds the available context size
      * (256 tokens)" on its first message.
      */
-    totalContext: String((template.maxModelLen ?? 8192) * (template.maxConcurrentSequences ?? 1)),
+    totalContext: String(totalContextFor(template)),
     chatGpuFraction: vram.chat === null ? '' : String(vram.chat),
     embeddingGpuFraction: vram.embedding === null ? '' : String(vram.embedding),
     mountPath: template.networkVolumeMountPath,

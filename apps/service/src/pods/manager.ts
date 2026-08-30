@@ -7,6 +7,14 @@ import { buildCreatePodRequest } from './plan.js'
 
 const READY_POLL_MS = 5_000
 
+/**
+ * How long a readiness answer is trusted.
+ *
+ * Short, because it gates whether a request is forwarded: too long and the
+ * gateway keeps posting into a port nothing is listening on.
+ */
+const READY_CACHE_MS = 10_000
+
 export interface PodRecord {
   id: string
   templateId: string
@@ -56,6 +64,7 @@ export interface PodStatusReport {
 export class PodManager {
   private startInFlight: Promise<PodRecord> | null = null
   private startedBy: 'user' | 'scheduler' = 'user'
+  private readyCache: { base: string; ready: boolean; at: number } | null = null
 
   constructor(
     private readonly db: Db,
@@ -421,17 +430,36 @@ export class PodManager {
     )
   }
 
-  /** Does the active pod's engine answer right now? */
+  /**
+   * Does the active pod's engine answer right now?
+   *
+   * Cached briefly. Every request through the gateway asks, and a health probe
+   * per request would add a round trip to the pod for no benefit — but the
+   * answer must not be stale for long either, since it is what decides whether
+   * a request is forwarded or held.
+   */
   async engineAnswers(): Promise<boolean> {
     const active = this.describe()
     const base = active?.chatUrl ?? active?.embeddingUrl
     if (!base) return false
+
+    const cached = this.readyCache
+    if (cached && cached.base === base && Date.now() - cached.at < READY_CACHE_MS) return cached.ready
+
+    let ready = false
     try {
       const response = await fetch(`${base}/health`, { signal: AbortSignal.timeout(4_000) })
-      return response.ok
+      ready = response.ok
     } catch {
-      return false
+      ready = false
     }
+    this.readyCache = { base, ready, at: Date.now() }
+    return ready
+  }
+
+  /** Forgets the cached readiness, after any action that changes it. */
+  private forgetReadiness(): void {
+    this.readyCache = null
   }
 
   /** Asks the pod's own engine whether it is serving yet. */
@@ -506,6 +534,7 @@ export class PodManager {
 
   /** Makes an existing pod the one the gateway routes to. */
   select(podId: string): boolean {
+    this.forgetReadiness()
     const row = this.db.prepare('SELECT id FROM pods WHERE id = ?').get(podId) as { id: string } | undefined
     if (!row) return false
     // One pod serves at a time; the others are marked stopped locally so the
@@ -570,6 +599,7 @@ export class PodManager {
   }
 
   private markStopped(podId: string, reason = 'replaced'): void {
+    this.forgetReadiness()
     this.db
       .prepare("UPDATE pods SET stopped_at = ?, status = 'EXITED', stop_reason = ? WHERE id = ?")
       .run(new Date().toISOString(), reason, podId)

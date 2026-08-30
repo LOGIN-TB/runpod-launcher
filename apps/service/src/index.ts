@@ -64,7 +64,22 @@ app.get('/health', async () => ({
 await registerGatewayRoutes(app, {
   resolvePod: async ({ wait }) => {
     const active = pods.describe()
-    if (active) return { state: 'ready', pod: active }
+    if (active) {
+      // A pod our records call RUNNING is not necessarily serving: RunPod
+      // reports RUNNING minutes before the engine binds its port, and its
+      // proxy answers 404 until something is listening. Forwarding into that
+      // handed clients a bare 404 within a third of a second — the request
+      // looked rejected when it had simply arrived too early.
+      if (await pods.engineAnswers()) return { state: 'ready', pod: active }
+
+      const waitSeconds = settings.read().wakeWaitSeconds
+      if (!wait || waitSeconds === 0) return { state: 'starting' }
+
+      const record = pods.current()
+      const serving = record ? await pods.waitUntilServing(record.id, waitSeconds * 1000) : false
+      const ready = serving ? pods.describe() : null
+      return ready ? { state: 'ready', pod: ready } : { state: 'starting' }
+    }
 
     // Falls back to the scheduled template, so a request arriving after the
     // night shutdown can still wake the pod — which is the whole point of

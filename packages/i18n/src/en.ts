@@ -107,6 +107,8 @@ export const en = {
   'template.gpu': 'Graphics card',
   'template.advanced': 'Advanced',
   'template.contextLength': 'Context length',
+  'template.contextFits': 'This card has room for roughly {max} tokens of context in total.',
+  'template.contextTooLarge': 'That asks for {asked} tokens of context; this card has room for about {max}. The engine would fail after downloading the model.',
   'template.contextLengthHint': 'How much of a conversation one request may carry. Agents need a lot: a coding assistant can send twenty thousand tokens in its first message.',
   'template.concurrency': 'Requests at once',
   'template.concurrencyHint.vllm': 'How many requests may run in parallel. Hybrid-attention models need one cache block each, and vLLM’s default of 256 does not always fit.',

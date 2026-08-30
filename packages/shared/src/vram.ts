@@ -55,3 +55,25 @@ export function estimateKvHeadroomGib(args: {
  * about 1.7 GiB, which is a few thousand tokens.
  */
 export const MIN_USABLE_KV_GIB = 4
+
+/**
+ * Rough KV cache cost of one token, in bytes.
+ *
+ * Measured on Qwen3.8-27B, twice, at different weight precisions: 134,106
+ * tokens in 10.58 GiB and 273,673 tokens in 21.58 GiB — about 83 KiB per token
+ * either way, since the cache size follows the architecture rather than how the
+ * weights are stored.
+ *
+ * It is a guard rail, not a prediction. Smaller models are far cheaper per
+ * token, so this over-estimates for them, which is the safe direction: it warns
+ * about a context that will not fit and never promises one that will not.
+ */
+export const KV_BYTES_PER_TOKEN = 83 * 1024
+
+/** Roughly how many tokens of context the free VRAM can hold. */
+export function maxContextTokens(headroomGib: number): number {
+  if (headroomGib <= 0) return 0
+  // Rounded down to a round number, since precision here is false comfort.
+  const tokens = (headroomGib * 1024 ** 3) / KV_BYTES_PER_TOKEN
+  return Math.floor(tokens / 1024) * 1024
+}

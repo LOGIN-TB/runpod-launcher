@@ -1,6 +1,13 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import type { Template } from '@runpod-launcher/shared'
-import { presetForFormat, suitableGpus, VLLM_PRESET } from '@runpod-launcher/shared'
+import {
+  bytesToGib,
+  estimateKvHeadroomGib,
+  maxContextTokens,
+  presetForFormat,
+  suitableGpus,
+  VLLM_PRESET,
+} from '@runpod-launcher/shared'
 import { api, type Connection, type GpuType, type ModelVerdict } from '../lib/api.js'
 import { useI18n } from '../lib/i18n.js'
 import { Badge, Button, Card, EmptyState, Field, Input } from '../components/primitives.js'
@@ -264,12 +271,32 @@ function TemplateEditor({
    */
   const effectiveSeqs = seqsTouched ? maxSeqs : String(preset.defaultConcurrency)
 
+  /**
+   * How much context the card can actually hold, and whether the request fits.
+   *
+   * Nothing checked this before: a template asking for the model's native
+   * 262,144-token window across four slots is a million tokens of cache, and
+   * llama.cpp would have discovered that only after downloading 29 GB.
+   */
+  const contextBudget = ((): { fits: boolean; max: number; asked: number } | null => {
+    if (!gpu || chatBytes === 0) return null
+    const headroom = estimateKvHeadroomGib({
+      gpuMemoryGib: gpu.memory,
+      weightsGib: bytesToGib(chatBytes + embeddingBytes),
+    })
+    const max = maxContextTokens(headroom)
+    // llama.cpp shares one budget between slots; vLLM's window is per request.
+    const asked = preset.engine === 'llamacpp' ? Number(maxLen) * Number(effectiveSeqs) : Number(maxLen)
+    return { fits: asked <= max, max, asked }
+  })()
+
   const blocked =
     !name ||
     !gpu ||
     (!chat.repoId && !useEmbedding) ||
     (chat.repoId !== '' && chat.verdict?.compatible === false) ||
-    (useEmbedding && embedding.verdict?.compatible === false)
+    (useEmbedding && embedding.verdict?.compatible === false) ||
+    contextBudget?.fits === false
 
   const save = async (): Promise<void> => {
     setSaving(true)
@@ -418,6 +445,17 @@ function TemplateEditor({
         <p className="muted small engine-note">{preset.note}</p>
       ) : null}
 
+      {contextBudget ? (
+        <p className={contextBudget.fits ? 'muted small' : 'field-error'}>
+          {contextBudget.fits
+            ? t('template.contextFits', { max: contextBudget.max.toLocaleString() })
+            : t('template.contextTooLarge', {
+                asked: contextBudget.asked.toLocaleString(),
+                max: contextBudget.max.toLocaleString(),
+              })}
+        </p>
+      ) : null}
+
       <h3>{t('schedule.title')}</h3>
       <ScheduleEditor schedule={schedule} timezone={schedule.timezone} onChange={setSchedule} />
 
@@ -427,7 +465,18 @@ function TemplateEditor({
 
       {advanced ? (
         <div className="row">
-          <Field label={t('template.contextLength')} hint={t('template.contextLengthHint')}>
+          <Field
+            label={t('template.contextLength')}
+            hint={t('template.contextLengthHint')}
+            {...(contextBudget && !contextBudget.fits
+              ? {
+                  error: t('template.contextTooLarge', {
+                    asked: contextBudget.asked.toLocaleString(),
+                    max: contextBudget.max.toLocaleString(),
+                  }),
+                }
+              : {})}
+          >
             <Input type="number" value={maxLen} onChange={(event) => setMaxLen(event.target.value)} />
           </Field>
           <Field label={t('template.concurrency')} hint={t(`template.concurrencyHint.${preset.engine}` as const)}>

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { engineForFormat, suitableGpus, UNUSABLE_FORMATS } from './engine.js'
+import { estimateKvHeadroomGib, maxContextTokens } from './vram.js'
 import { presetForFormat, LLAMACPP_PRESET, VLLM_PRESET } from './presets.js'
 
 test('GGUF selects llama.cpp, everything else vLLM, MLX nothing', () => {
@@ -93,4 +94,31 @@ test('each engine declares a concurrency that suits how it spends memory', () =>
   assert.equal(VLLM_PRESET.defaultConcurrency, 64)
   assert.match(LLAMACPP_PRESET.chatArgs, /--ctx-size \{\{totalContext\}\}/)
   assert.match(VLLM_PRESET.chatArgs, /--max-model-len \{\{maxModelLen\}\}/)
+})
+
+test('the context budget is a guard rail against a request no card can hold', () => {
+  // A template asked for the model's native 262,144-token window across four
+  // slots — a million tokens of cache. llama.cpp would have found that out only
+  // after downloading 29 GB.
+  const headroom = estimateKvHeadroomGib({ gpuMemoryGib: 48, weightsGib: 27 })
+  const max = maxContextTokens(headroom)
+
+  assert.ok(max > 10_000, `a 48 GiB card should hold a usable window, got ${max}`)
+  assert.ok(max < 262_144, 'but not the model’s native maximum alongside 27 GiB of weights')
+  assert.ok(1_048_576 > max, 'and certainly not four slots of it')
+})
+
+test('the estimate matches the two measured runs', () => {
+  // Qwen3.8-27B on an L40S: 10.58 GiB held 134,106 tokens, 21.58 GiB held
+  // 273,673. Both work out at about 83 KiB per token.
+  for (const [gib, measured] of [[10.58, 134_106], [21.58, 273_673]] as const) {
+    const estimate = maxContextTokens(gib)
+    const ratio = estimate / measured
+    assert.ok(ratio > 0.9 && ratio < 1.1, `estimated ${estimate} against ${measured} measured`)
+  }
+})
+
+test('no headroom means no context, not a negative one', () => {
+  assert.equal(maxContextTokens(0), 0)
+  assert.equal(maxContextTokens(-5), 0)
 })

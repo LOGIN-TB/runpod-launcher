@@ -117,3 +117,81 @@ test('a running pod still reports what it actually serves, not the template', as
   const response = await server.inject({ method: 'GET', url: '/v1/models', headers: { authorization: 'Bearer good' } })
   assert.deepEqual((body(response) as { data: Array<{ id: string }> }).data.map((m) => m.id), ['actually-loaded'])
 })
+
+test('a pod that is RUNNING but not yet listening is waited for, not forwarded into', async () => {
+  // Reported live: an agent got HTTP 404 in 0.35 s, three times. The route
+  // existed and the model name matched — the 404 came from RunPod's proxy,
+  // which answers 404 until something binds the port, and was passed straight
+  // through. Our records said RUNNING, which RunPod reports minutes before the
+  // engine can serve.
+  const server = await app(deps({ resolvePod: async () => ({ state: 'starting' }) }))
+
+  const response = await server.inject({
+    method: 'POST',
+    url: '/v1/chat/completions',
+    headers: { authorization: 'Bearer good' },
+    payload: { model: 'm', messages: [{ role: 'user', content: 'hallo' }] },
+  })
+
+  assert.equal(response.statusCode, 503, 'not a 404: the request is early, not wrong')
+  const payload = body(response) as { error: { code: string; message: string } }
+  assert.equal(payload.error.code, 'model_loading')
+  assert.match(payload.error.message, /still starting/)
+  assert.equal(response.headers['retry-after'], '30')
+})
+
+test('a 404 from the proxy in front of the pod is not passed off as the engine’s', async () => {
+  // The engine answers JSON. RunPod's proxy answers text when nothing is bound
+  // to the port, and forwarding that told the client its request was wrong.
+  const fromProxy = new Response('not found', { status: 404, headers: { 'content-type': 'text/plain' } })
+  const server = await app(
+    deps({
+      resolvePod: async () => ({
+        state: 'ready',
+        pod: { chatUrl: 'http://pod', embeddingUrl: null, podApiKey: 'k', servedModels: ['m'] },
+      }),
+    }),
+  )
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () => fromProxy) as unknown as typeof fetch
+  try {
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { authorization: 'Bearer good' },
+      payload: { model: 'm', messages: [] },
+    })
+    assert.equal(response.statusCode, 503)
+    assert.equal((body(response) as { error: { code: string } }).error.code, 'model_loading')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('a genuine 404 from the engine is passed through unchanged', async () => {
+  const fromEngine = new Response('{"error":{"message":"no such model"}}', {
+    status: 404,
+    headers: { 'content-type': 'application/json' },
+  })
+  const server = await app(
+    deps({
+      resolvePod: async () => ({
+        state: 'ready',
+        pod: { chatUrl: 'http://pod', embeddingUrl: null, podApiKey: 'k', servedModels: ['m'] },
+      }),
+    }),
+  )
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () => fromEngine) as unknown as typeof fetch
+  try {
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { authorization: 'Bearer good' },
+      payload: { model: 'm', messages: [] },
+    })
+    assert.equal(response.statusCode, 404, 'the engine’s own verdict stands')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
