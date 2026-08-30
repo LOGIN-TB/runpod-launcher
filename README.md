@@ -7,9 +7,9 @@ A GPU big enough for a 27B model costs roughly **$400/month if you leave it
 running**. This project exists to make that number a fraction of itself without
 you having to remember to switch anything off.
 
-> **Status: early.** The service, the gateway and the pod image work and are
-> covered by tests. The desktop app, the scheduler and the in-app help are not
-> built yet. See [the roadmap](#roadmap).
+> **Status: working, unsigned, lightly used.** Everything below is built and
+> tested, and has been run against real RunPod hardware. The desktop app is not
+> code-signed, so macOS and Windows warn on first launch.
 
 ## How it fits together
 
@@ -83,6 +83,32 @@ curl http://your-server:8080/v1/chat/completions \
 **Client tokens can only use the model.** They cannot start a pod or read
 settings — so a token leaking out of an n8n workflow cannot rent you hardware.
 Device tokens, which the app holds, are what grant control.
+
+## Letting it sleep
+
+The point of the project. A template can carry a schedule — weekdays, hours,
+and a timezone that belongs to the schedule rather than to the server, because
+a container on a VPS runs in UTC and `07:00` has to mean seven in the morning
+where you are.
+
+Three rules run on top of each other:
+
+| | |
+|---|---|
+| **Schedule** | Up between the hours you set, on the days you pick |
+| **Idle shutdown** | Down again after N minutes with no requests, even mid-window |
+| **Spend cap** | Down immediately at a daily or monthly limit, whatever else says |
+
+An idle shutdown is not undone by the schedule: once stopped for idleness the
+pod stays down until the window comes round again, or until a request arrives.
+Getting that wrong produced a start/stop loop that rented a fresh GPU every few
+minutes.
+
+A request to a sleeping pod wakes it. The gateway holds the connection while
+the engine comes up rather than failing straight away, which is what makes this
+work with clients that know nothing about the launcher — an agent has no reason
+to call a wake endpoint first. Set the wait longer than a cold start: about five
+minutes for a 20 GB model, more if it has to be downloaded.
 
 ## Templates
 
@@ -161,9 +187,11 @@ is the source of truth for paths and payloads.
 - [ ] Walking skeleton: a real answer from a real pod, measured
 - [x] German and English throughout, including the service's own messages
 - [x] App UI: pairing, overview, template editor with model picker, client tokens, settings
-- [ ] Tauri shell (needs `rustup`; the UI itself is done and runs in a browser)
-- [ ] In-app help with generated screenshots
-- [ ] Scheduler, idle shutdown, wake-on-request, spend limits
+- [x] Tauri shell, with the device token in the OS keychain and a tray indicator
+- [x] In-app help, self-checking first-run guide, generated screenshots
+- [x] Scheduler, idle shutdown, wake-on-request, spend limits
+- [ ] Several pods at once (the gateway already routes by model name)
+- [ ] Code signing, so the app opens without a warning
 
 ## Licence
 
