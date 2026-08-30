@@ -25,6 +25,18 @@ export class RunpodError extends Error {
   get isCapacityExhausted(): boolean {
     return this.status === 400 && /no longer any instances available/i.test(this.body)
   }
+
+  /**
+   * True when a paused pod cannot be resumed because its host has no free GPU.
+   *
+   * A stopped pod keeps its machine but not a claim on a card, and RunPod hands
+   * the card to somebody else. Seen live on 2026-08-30: "There are not enough
+   * free GPUs on the host machine to start this pod." The pod is not broken —
+   * a new one has to be built from the same template instead.
+   */
+  get isHostGpuUnavailable(): boolean {
+    return this.status === 400 && /not enough free GPUs/i.test(this.body)
+  }
 }
 
 type Operation = keyof typeof OPERATIONS

@@ -240,6 +240,12 @@ export class PodManager {
         this.markStopped(podId)
         return null
       }
+      // The host gave the card away while the pod was paused. Nothing is wrong
+      // with the pod; it simply cannot come back here.
+      if (error instanceof RunpodError && error.isHostGpuUnavailable) {
+        this.markStopped(podId, 'host-gpu-unavailable')
+        return null
+      }
       // Already running. RunPod rejects a redundant start with 409, which is
       // agreement, not failure — it happens whenever our record has drifted
       // behind reality, such as after the service restarts.
@@ -440,10 +446,47 @@ export class PodManager {
     return { state: 'preparing', detail: null }
   }
 
-  /** Stops or terminates any pod, not only the active one. */
+  /**
+   * Stops or terminates any pod, not only the active one.
+   *
+   * A redundant action is agreement rather than failure: stopping an
+   * already-stopped pod, or deleting one RunPod has already removed, is the
+   * state the caller wanted.
+   */
   async act(podId: string, action: 'stop' | 'terminate', reason = 'manual'): Promise<void> {
-    await this.runpod().podAction(podId, action)
+    try {
+      await this.runpod().podAction(podId, action)
+    } catch (error) {
+      const benign =
+        error instanceof RunpodError && (error.status === 409 || error.status === 404)
+      if (!benign) throw error
+    }
     this.markStopped(podId, reason)
+  }
+
+  /**
+   * Resumes a pod that was paused, and makes it the one the gateway uses.
+   *
+   * The counterpart to pausing. Without it a paused pod could only be deleted,
+   * which throws away the model it has already downloaded — the whole reason
+   * for pausing rather than deleting in the first place.
+   */
+  async resume(podId: string): Promise<PodRecord> {
+    const row = this.db
+      .prepare('SELECT template_id AS templateId FROM pods WHERE id = ?')
+      .get(podId) as { templateId: string | null } | undefined
+    if (!row?.templateId) throw new Error('That pod is not one this launcher created.')
+
+    const client = this.runpod()
+    const resumed = await this.tryResume(client, podId, row.templateId)
+    if (!resumed) {
+      throw new Error(
+        'This pod cannot be resumed: the machine it was paused on has no free GPU any more. ' +
+          'Create a new pod from the same template — the model will be downloaded again.',
+      )
+    }
+    this.select(podId)
+    return resumed
   }
 
   /** Makes an existing pod the one the gateway routes to. */

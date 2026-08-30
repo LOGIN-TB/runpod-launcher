@@ -255,3 +255,53 @@ test('an unreadable GPU catalog means no fallbacks, not unchecked ones', async (
   await assert.rejects(() => manager.start(tpl))
   assert.deepEqual(seen.map(([gpu]) => gpu), ['NVIDIA L40S'], 'only the card that was asked for')
 })
+
+test('a paused pod whose host lost its GPU says so, and says what to do', async () => {
+  // Live on 2026-08-30, resuming a paused pod: "There are not enough free GPUs
+  // on the host machine to start this pod." A stopped pod keeps its machine but
+  // not a claim on a card. The pod is fine; it just cannot come back there.
+  const db = openDatabase(':memory:')
+  const tpl = template({ lifecycleMode: 'stopResume', dataCenterIds: [] })
+  const now = new Date().toISOString()
+  db.prepare('INSERT INTO templates (id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+    .run('t1', 'test', JSON.stringify(tpl), now, now)
+  db.prepare(
+    `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, started_at, stopped_at)
+     VALUES ('paused', 't1', 'EXITED', 0.99, ?, ?, ?)`,
+  ).run(now, now, now)
+
+  const noGpu = (async (url: unknown) => {
+    if (/\/pods\/[^/]+\/action$/.test(String(url))) {
+      return new Response(
+        '{"detail":"There are not enough free GPUs on the host machine to start this pod.","status":400}',
+        { status: 400 },
+      )
+    }
+    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as unknown as typeof fetch
+
+  const manager = new PodManager(db, () => new RunpodClient('k', noGpu), () => null)
+  await assert.rejects(() => manager.resume('paused'), /no free GPU any more.*Create a new pod/s)
+})
+
+test('stopping something already stopped is agreement, not an error', async () => {
+  // RunPod rejects the redundant transition. Surfacing that as a failure makes
+  // a button look broken for doing exactly what was asked.
+  const db = openDatabase(':memory:')
+  const now = new Date().toISOString()
+  db.prepare(
+    `INSERT INTO pods (id, status, cost_per_hour, created_at) VALUES ('p1', 'EXITED', 0.5, ?)`,
+  ).run(now)
+
+  const conflicting = (async (url: unknown) => {
+    if (/\/pods\/[^/]+\/action$/.test(String(url))) {
+      return new Response('{"detail":"action \\"stop\\" is not valid for status EXITED"}', { status: 409 })
+    }
+    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as unknown as typeof fetch
+
+  const manager = new PodManager(db, () => new RunpodClient('k', conflicting), () => null)
+  await manager.act('p1', 'stop')
+  const row = db.prepare('SELECT stopped_at AS s FROM pods WHERE id = ?').get('p1') as { s: string | null }
+  assert.ok(row.s, 'and the pod is recorded as stopped')
+})

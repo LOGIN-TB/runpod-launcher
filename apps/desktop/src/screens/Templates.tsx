@@ -6,6 +6,7 @@ import { useI18n } from '../lib/i18n.js'
 import { Badge, Button, Card, EmptyState, Field, Input } from '../components/primitives.js'
 import { ModelPicker } from '../components/ModelPicker.js'
 import { ScheduleEditor } from '../components/ScheduleEditor.js'
+import { Confirm } from '../components/Confirm.js'
 
 export function Templates({
   connection,
@@ -20,6 +21,7 @@ export function Templates({
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<Template | null>(null)
 
   const act = async (id: string, fn: () => Promise<unknown>): Promise<void> => {
     setBusy(id)
@@ -62,6 +64,19 @@ export function Templates({
         </p>
       ) : null}
 
+      <Confirm
+        open={pendingDelete !== null}
+        title={t('action.delete')}
+        body={t('template.deleteConfirm', { name: pendingDelete?.name ?? '' })}
+        danger
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={() => {
+          const template = pendingDelete
+          setPendingDelete(null)
+          if (template) void act(template.id, () => api.deleteTemplate(connection, template.id))
+        }}
+      />
+
       {templates.length === 0 ? (
         <Card>
           <EmptyState title={t('template.none')} hint={t('template.noneHint')} />
@@ -91,21 +106,19 @@ export function Templates({
 
               {/* A list you can only look at is not a list of anything. */}
               <div className="pod-actions">
+                {/* This makes a new pod; it does not resume an existing one.
+                    Calling it "Start" made people expect the latter. */}
                 <Button
                   variant="primary"
                   loading={busy === template.id}
                   onClick={() => act(template.id, () => api.startPod(connection, template.id))}
                 >
-                  {t('pod.start')}
+                  {t('template.createPod')}
                 </Button>
                 <Button
                   variant="danger"
                   loading={busy === template.id}
-                  onClick={() => {
-                    if (confirm(t('template.deleteConfirm', { name: template.name }))) {
-                      void act(template.id, () => api.deleteTemplate(connection, template.id))
-                    }
-                  }}
+                  onClick={() => setPendingDelete(template)}
                 >
                   {t('action.delete')}
                 </Button>
@@ -359,6 +372,7 @@ function TemplateEditor({
           {error}
         </p>
       ) : null}
+
 
       <div className="row">
         <Button variant="primary" loading={saving} disabled={blocked} onClick={save}>

@@ -167,6 +167,8 @@ export const api = {
 
   pods: (c: Connection) => request<{ pods: PodStatusReport[] }>(c, '/pods'),
   activity: (c: Connection) => request<{ events: ActivityEvent[] }>(c, '/activity'),
+  startOnePod: (c: Connection, id: string) =>
+    request<{ id: string }>(c, `/pods/${id}/start`, { method: 'POST', body: '{}' }),
   stopOnePod: (c: Connection, id: string) => request<unknown>(c, `/pods/${id}/stop`, { method: 'POST', body: '{}' }),
   deletePod: (c: Connection, id: string) => request<void>(c, `/pods/${id}`, { method: 'DELETE' }),
   selectPod: (c: Connection, id: string) => request<unknown>(c, `/pods/${id}/select`, { method: 'POST', body: '{}' }),

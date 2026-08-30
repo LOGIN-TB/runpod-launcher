@@ -3,6 +3,7 @@ import type { MessageKey } from '@runpod-launcher/i18n'
 import { api, type Connection, type PodStatusReport, type Readiness, type SelfTestResult } from '../lib/api.js'
 import { useI18n } from '../lib/i18n.js'
 import { Badge, Button, Card, EmptyState } from './primitives.js'
+import { Confirm } from './Confirm.js'
 
 /** Fast while something is coming up, so a state change is visible promptly. */
 const POLL_BUSY_MS = 10_000
@@ -35,6 +36,8 @@ export function PodList({ connection }: { connection: Connection }): ReactNode {
   const [busy, setBusy] = useState<string | null>(null)
   const [test, setTest] = useState<SelfTestResult | null>(null)
   const [testing, setTesting] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const load = async (): Promise<void> => {
     const result = await api.pods(connection).catch(() => null)
@@ -50,9 +53,14 @@ export function PodList({ connection }: { connection: Connection }): ReactNode {
 
   const act = async (id: string, fn: () => Promise<unknown>): Promise<void> => {
     setBusy(id)
+    setError(null)
     try {
       await fn()
       await load()
+    } catch (cause) {
+      // Silently swallowing this is how a dead button looks like a dead
+      // feature. RunPod refuses some transitions, and the reason matters.
+      setError((cause as Error).message)
     } finally {
       setBusy(null)
     }
@@ -101,6 +109,25 @@ export function PodList({ connection }: { connection: Connection }): ReactNode {
         </p>
       ) : null}
 
+      {error ? (
+        <p className="field-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+
+      <Confirm
+        open={pendingDelete !== null}
+        title={t('pods.delete')}
+        body={t('pods.deleteConfirm')}
+        danger
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={() => {
+          const id = pendingDelete
+          setPendingDelete(null)
+          if (id) void act(id, () => api.deletePod(connection, id))
+        }}
+      />
+
       <ul className="pod-list">
         {pods.map((pod) => (
           <li key={pod.id} className={pod.isActive ? 'pod active' : 'pod'}>
@@ -127,12 +154,18 @@ export function PodList({ connection }: { connection: Connection }): ReactNode {
             </div>
 
             <div className="pod-actions">
-              {!pod.isActive && pod.readiness === 'ready' ? (
-                <Button variant="secondary" loading={busy === pod.id} onClick={() => act(pod.id, () => api.selectPod(connection, pod.id))}>
-                  {t('pods.use')}
+              {/* A paused pod keeps the model it downloaded, so starting it
+                  again is the cheap path — and without this button the only
+                  way onward was to delete it and download all over. */}
+              {pod.readiness === 'stopped' ? (
+                <Button
+                  variant="primary"
+                  loading={busy === pod.id}
+                  onClick={() => act(pod.id, () => api.startOnePod(connection, pod.id))}
+                >
+                  {t('pods.start')}
                 </Button>
-              ) : null}
-              {pod.readiness !== 'stopped' ? (
+              ) : (
                 <Button
                   variant="secondary"
                   loading={busy === pod.id}
@@ -141,15 +174,23 @@ export function PodList({ connection }: { connection: Connection }): ReactNode {
                 >
                   {t('pods.stop')}
                 </Button>
+              )}
+
+              {!pod.isActive && pod.readiness === 'ready' ? (
+                <Button
+                  variant="secondary"
+                  loading={busy === pod.id}
+                  onClick={() => act(pod.id, () => api.selectPod(connection, pod.id))}
+                >
+                  {t('pods.use')}
+                </Button>
               ) : null}
+
               <Button
                 variant="danger"
                 loading={busy === pod.id}
                 title={t('pods.deleteHint')}
-                onClick={() => {
-                  // Irreversible, and it discards the downloaded model with it.
-                  if (confirm(t('pods.deleteConfirm'))) void act(pod.id, () => api.deletePod(connection, pod.id))
-                }}
+                onClick={() => setPendingDelete(pod.id)}
               >
                 {t('pods.delete')}
               </Button>

@@ -309,6 +309,20 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps)
     }
   })
 
+  /** Resume a paused pod and route the gateway at it. */
+  app.post('/pods/:id/start', async (request, reply) => {
+    const device = await requireDevice(request, reply)
+    if (!device) return
+    const { id } = request.params as { id: string }
+    try {
+      const record = await pods.resume(id)
+      audit(device.id, 'pod.start', { podId: id }, request.ip)
+      return reply.send(record)
+    } catch (error) {
+      return reply.code(502).send({ error: (error as Error).message })
+    }
+  })
+
   /** Pause a specific pod. It keeps its disk and can be resumed. */
   app.post('/pods/:id/stop', async (request, reply) => {
     const device = await requireDevice(request, reply)
