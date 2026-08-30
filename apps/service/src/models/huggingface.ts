@@ -26,8 +26,12 @@ export interface ModelSearchHit {
 
 /** One downloadable quantisation inside a GGUF repository. */
 export interface GgufVariant {
-  /** Quantisation label, e.g. `Q4_K_M`. */
+  /** Quantisation level, e.g. `Q4_K_M`. */
   label: string
+  /** Tag that selects this variant for `-hf repo:tag`, unambiguously. */
+  variant: string
+  /** Set when several builds share a level, to tell them apart on screen. */
+  qualifier: string | null
   bytes: number
   /** Files to fetch — more than one when the weights are sharded. */
   files: string[]
@@ -208,6 +212,8 @@ export class HuggingFaceClient {
   async evaluate(args: {
     repoId: string
     revision?: string
+    /** Which GGUF build to size, when the repository offers several. */
+    variant?: string
     kind: Kind
     engine: Engine
     gpuDisplayName: string
@@ -217,6 +223,14 @@ export class HuggingFaceClient {
   }): Promise<ModelVerdict> {
     const details = await this.inspect(args.repoId, args.revision)
     const problems: Problem[] = []
+
+    // A GGUF repository is a set of alternatives, so the size depends entirely
+    // on which one is chosen. Sizing the default when the user has picked
+    // another is how a 15 GB build gets rejected for not fitting.
+    if (args.variant && details.ggufVariants) {
+      const chosen = details.ggufVariants.find((candidate) => candidate.variant === args.variant)
+      if (chosen) details.weightBytes = chosen.bytes
+    }
 
     if (details.inaccessible) {
       return { details, compatible: false, problems: [details.inaccessible], headroomGib: null }
@@ -255,11 +269,16 @@ export class HuggingFaceClient {
 }
 
 /**
- * Groups a GGUF repository's files into one entry per quantisation.
+ * Groups a GGUF repository's files into the alternatives it actually offers.
  *
- * Filenames follow `Name-Q4_K_M.gguf`, and large ones are sharded as
- * `Name-Q8_0-00001-of-00002.gguf`. The shards of one quantisation belong
- * together; different quantisations are alternatives, not parts.
+ * The grouping key is the whole filename minus any shard suffix, not the
+ * quantisation level. A repository routinely carries several distinct models
+ * side by side at the same level — a plain build, a `noMTP` build, a small
+ * `draft` model — and keying on the level alone welds them into one entry whose
+ * size is their sum. That is how a 29 GB Q8_0 was reported as 57 GB and
+ * rejected as too large for a card it fits on comfortably.
+ *
+ * Real shards, named `…-00001-of-00002.gguf`, do belong together and are added.
  */
 export function groupGgufVariants(
   files: ReadonlyArray<{ rfilename: string; size?: number }>,
@@ -269,19 +288,68 @@ export function groupGgufVariants(
   for (const file of files) {
     if (!/\.gguf$/i.test(file.rfilename)) continue
     const name = file.rfilename.replace(/^.*\//, '')
-    const withoutShard = name.replace(/-\d{5}-of-\d{5}\.gguf$/i, '').replace(/\.gguf$/i, '')
-    const label = /-(I?Q\d[^-]*|BF16|F16|F32)$/i.exec(withoutShard)?.[1]?.toUpperCase() ?? withoutShard
 
-    const existing = groups.get(label)
+    // `mmproj-*` is the vision projector that accompanies a multimodal model,
+    // not a model itself. Listing it as a choice offers a 0.9 GB "variant" of
+    // a 27B model.
+    if (/^mmproj[-_]/i.test(name)) continue
+
+    const base = name.replace(/-\d{5}-of-\d{5}\.gguf$/i, '').replace(/\.gguf$/i, '')
+
+    const existing = groups.get(base)
     if (existing) {
       existing.bytes += file.size ?? 0
       existing.files.push(file.rfilename)
     } else {
-      groups.set(label, { label, bytes: file.size ?? 0, files: [file.rfilename] })
+      groups.set(base, {
+        label: quantisationLabel(base),
+        variant: base,
+        qualifier: null,
+        bytes: file.size ?? 0,
+        files: [file.rfilename],
+      })
     }
   }
 
-  return [...groups.values()].sort((a, b) => a.bytes - b.bytes)
+  const variants = [...groups.values()].sort((a, b) => a.bytes - b.bytes)
+
+  // The tag only needs to be as long as it takes to be unambiguous. Where a
+  // level appears once, `Q8_0` is enough; where two builds share it, the
+  // qualifier in front comes along: `noMTP-Q8_0`.
+  const levelCounts = new Map<string, number>()
+  for (const variant of variants) levelCounts.set(variant.label, (levelCounts.get(variant.label) ?? 0) + 1)
+
+  for (const variant of variants) {
+    if ((levelCounts.get(variant.label) ?? 0) > 1) {
+      variant.variant = distinguishingSuffix(variant.variant)
+      // Everything before the level, which is what separates the two builds.
+      variant.qualifier = variant.variant.slice(0, Math.max(0, variant.variant.length - variant.label.length - 1)) || null
+    } else {
+      variant.variant = variant.label
+    }
+  }
+
+  return variants
+}
+
+/** The quantisation level in a GGUF filename, e.g. `Q4_K_M`. */
+function quantisationLabel(base: string): string {
+  return /[-_](I?Q\d[A-Z0-9_]*|BF16|F16|F32)$/i.exec(base)?.[1]?.toUpperCase() ?? base
+}
+
+/**
+ * What tells one variant from another, for `-hf repo:tag`.
+ *
+ * llama.cpp matches the tag against the filename, so anything unique to this
+ * variant works — `Q4_K_M` for the plain build, `noMTP-Q8_0` for the other one.
+ */
+function distinguishingSuffix(base: string): string {
+  const quant = quantisationLabel(base)
+  if (quant === base) return base
+  // Keep any qualifier sitting in front of the level, such as `noMTP`.
+  const before = base.slice(0, base.length - quant.length - 1)
+  const qualifier = /[-_]([A-Za-z][A-Za-z0-9]*)$/.exec(before)?.[1]
+  return qualifier && !/^\d+B$/i.test(qualifier) ? `${qualifier}-${quant}` : quant
 }
 
 /**
@@ -290,8 +358,11 @@ export function groupGgufVariants(
  * unquantised weights, which defeat the point of choosing GGUF.
  */
 export function pickDefaultGgufVariant(variants: readonly GgufVariant[]): GgufVariant | null {
-  const eightBitOrLess = variants.filter((v) => /^I?Q[1-8]/i.test(v.label))
-  const pool = eightBitOrLess.length > 0 ? eightBitOrLess : variants
+  // Draft models are speculative-decoding helpers, a couple of GB each. They
+  // are never what somebody means by "the model".
+  const candidates = variants.filter((v) => !/draft/i.test(v.variant))
+  const quantised = candidates.filter((v) => /^I?Q[1-8]/i.test(v.label))
+  const pool = quantised.length > 0 ? quantised : candidates
   return pool.at(-1) ?? null
 }
 

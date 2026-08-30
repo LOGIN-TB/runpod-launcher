@@ -121,3 +121,27 @@ test('the pod bearer token is not part of what the admin API describes', () => {
   assert.ok(!Object.keys(exposed).includes('podApiKey'))
   assert.ok(!JSON.stringify(exposed).includes('secret'))
 })
+
+test('a GGUF quantisation is passed to llama.cpp as repo:tag', () => {
+  // Without the tag llama.cpp picks a build itself, which for a repository
+  // holding fourteen alternatives is a coin toss between 1.7 GB and 29 GB.
+  const request = buildCreatePodRequest({
+    template: make({
+      engine: 'llamacpp',
+      chatModel: { repoId: 'JonathanColetti/Qwen3.8-27B-Uncensored-GGUF', quantisation: 'Q4_K_M' },
+      args: '-hf {{chatModel}} --port 8000 --api-key {{apiKey}}',
+    }),
+    podApiKey: 'k',
+    huggingfaceToken: null,
+  })
+  assert.match(request.args!, /-hf JonathanColetti\/Qwen3\.8-27B-Uncensored-GGUF:Q4_K_M /)
+})
+
+test('without a quantisation the repository is passed bare, as vLLM expects', () => {
+  const request = buildCreatePodRequest({
+    template: make({ chatModel: { repoId: 'Qwen/Qwen3.8-27B-FP8' }, args: '{{chatModel}} --port 8000' }),
+    podApiKey: 'k',
+    huggingfaceToken: null,
+  })
+  assert.match(request.args!, /^Qwen\/Qwen3\.8-27B-FP8 /)
+})

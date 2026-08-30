@@ -19,6 +19,14 @@ const modelSlotSchema = z.object({
   /** Branch, tag or commit. Defaults to the repo's default branch. */
   revision: z.string().optional(),
   /**
+   * Which build to load from a GGUF repository, e.g. `Q4_K_M`.
+   *
+   * A GGUF repository is a set of alternatives, not one model — the same
+   * weights at a dozen precisions, sometimes several model variants each. The
+   * choice belongs in the template, or the engine picks for itself.
+   */
+  quantisation: z.string().optional(),
+  /**
    * Name this model answers to in OpenAI requests. Defaults to `repoId`, which
    * is what most clients send.
    */

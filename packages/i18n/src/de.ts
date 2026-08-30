@@ -77,6 +77,7 @@ export const de = {
   'model.wontFit': 'Funktioniert hier nicht',
   'model.downloads': '{count} Downloads',
   'model.gguf.pick': 'Quantisierung',
+  'model.gguf.pickHint': 'Ein GGUF-Repo enthält dasselbe Modell in mehreren Genauigkeiten. Kleiner heißt schneller und billiger, größer erhält mehr von der ursprünglichen Qualität.',
 
   'schedule.title': 'Zeitplan',
   'schedule.enabled': 'Nach Zeitplan laufen',

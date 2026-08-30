@@ -72,6 +72,7 @@ export const en = {
   'model.wontFit': 'Will not work here',
   'model.downloads': '{count} downloads',
   'model.gguf.pick': 'Quantisation',
+  'model.gguf.pickHint': 'A GGUF repository holds the same model at several precisions. Smaller is faster and cheaper to run; larger keeps more of the original quality.',
 
   'schedule.title': 'Schedule',
   'schedule.enabled': 'Run on a schedule',

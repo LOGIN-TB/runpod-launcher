@@ -76,7 +76,7 @@ export interface ModelVerdict {
     weightBytes: number
     format: string
     gated: boolean
-    ggufVariants?: Array<{ label: string; bytes: number; files: string[] }>
+    ggufVariants?: Array<{ label: string; variant: string; qualifier: string | null; bytes: number; files: string[] }>
   }
   compatible: boolean
   problems: Problem[]

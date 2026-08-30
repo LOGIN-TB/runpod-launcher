@@ -160,6 +160,7 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps)
     const body = request.body as {
       repoId?: string
       revision?: string
+      variant?: string
       kind?: string
       engine?: string
       gpuDisplayName?: string
@@ -174,6 +175,7 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps)
         await deps.huggingface.evaluate({
           repoId: body.repoId,
           ...(body.revision ? { revision: body.revision } : {}),
+          ...(body.variant ? { variant: body.variant } : {}),
           kind: body.kind === 'embedding' ? 'embedding' : 'chat',
           engine: body.engine === 'llamacpp' ? 'llamacpp' : 'vllm',
           gpuDisplayName: body.gpuDisplayName,

@@ -201,3 +201,85 @@ test('the estimate does not promise room that utilisation has already excluded',
   // difference is 48 x 0.20 x 0.88, not a flat 48 x 0.20.
   assert.equal(Number((full - capped).toFixed(2)), Number((48 * 0.2 * 0.88).toFixed(2)))
 })
+
+/**
+ * The real file list of JonathanColetti/Qwen3.8-27B-Uncensored-GGUF, which
+ * carries three model lines side by side: the plain build, a `noMTP` build and
+ * small `draft` helpers, each at several precisions.
+ */
+const REAL_GGUF_REPO = [
+  { rfilename: 'Qwen3.8-27B-Uncensored-IQ2_M.gguf', size: 10_600_000_000 },
+  { rfilename: 'Qwen3.8-27B-Uncensored-IQ4_XS.gguf', size: 15_300_000_000 },
+  { rfilename: 'Qwen3.8-27B-Uncensored-Q4_K_M.gguf', size: 16_800_000_000 },
+  { rfilename: 'Qwen3.8-27B-Uncensored-Q5_K_M.gguf', size: 19_500_000_000 },
+  { rfilename: 'Qwen3.8-27B-Uncensored-Q6_K.gguf', size: 22_400_000_000 },
+  { rfilename: 'Qwen3.8-27B-Uncensored-Q8_0.gguf', size: 29_000_000_000 },
+  { rfilename: 'Qwen3.8-27B-Uncensored-noMTP-IQ2_M.gguf', size: 10_200_000_000 },
+  { rfilename: 'Qwen3.8-27B-Uncensored-noMTP-Q8_0.gguf', size: 28_600_000_000 },
+  { rfilename: 'Qwen3.8-27B-Uncensored-draft-Q4_0.gguf', size: 1_680_000_000 },
+  { rfilename: 'mmproj-Qwen3.8-27B-Uncensored-F16.gguf', size: 930_000_000 },
+  { rfilename: 'README.md' },
+]
+
+test('two builds at the same precision are alternatives, not one huge file', () => {
+  // Grouping by precision alone welded Q8_0 (29 GB) and noMTP-Q8_0 (28.6 GB)
+  // into a single 57 GB "variant", which was then rejected as too large for a
+  // 48 GiB card that fits either of them with room to spare.
+  const variants = groupGgufVariants(REAL_GGUF_REPO)
+  const q8 = variants.filter((v) => v.label === 'Q8_0')
+
+  assert.equal(q8.length, 2, 'the two Q8_0 builds stay separate')
+  assert.deepEqual(q8.map((v) => v.bytes).sort(), [28_600_000_000, 29_000_000_000])
+  assert.ok(q8.every((v) => v.bytes < 30e9), 'neither is the sum of both')
+})
+
+test('the sizes match what the model card advertises', () => {
+  const bySize = Object.fromEntries(
+    groupGgufVariants(REAL_GGUF_REPO)
+      .filter((v) => !v.qualifier?.includes('noMTP') && !v.variant.includes('draft'))
+      .map((v) => [v.label, Math.round(v.bytes / 1e8) / 10]),
+  )
+  assert.equal(bySize.IQ2_M, 10.6)
+  assert.equal(bySize.IQ4_XS, 15.3)
+  assert.equal(bySize.Q4_K_M, 16.8)
+  assert.equal(bySize.Q6_K, 22.4)
+  assert.equal(bySize.Q8_0, 29)
+})
+
+test('the vision projector is not offered as a variant of the model', () => {
+  // mmproj is the image encoder that accompanies a multimodal model. Listing
+  // it makes a 0.9 GB "build" of a 27B model.
+  const variants = groupGgufVariants(REAL_GGUF_REPO)
+  assert.ok(!variants.some((v) => v.files.some((f) => f.startsWith('mmproj'))))
+})
+
+test('a draft helper is never the default, and neither is the smallest build', () => {
+  const variants = groupGgufVariants(REAL_GGUF_REPO)
+  const chosen = pickDefaultGgufVariant(variants)
+  assert.ok(!chosen?.variant.includes('draft'), 'draft models are speculative-decoding helpers')
+  assert.equal(chosen?.bytes, 29_000_000_000, 'the largest genuine 8-bit-or-less build')
+})
+
+test('a tag is only as long as it needs to be to be unambiguous', () => {
+  const variants = groupGgufVariants(REAL_GGUF_REPO)
+  // Q4_K_M appears once here, so the bare level identifies it.
+  assert.equal(variants.find((v) => v.bytes === 16_800_000_000)?.variant, 'Q4_K_M')
+  // Q8_0 appears twice, so the qualifier comes along.
+  assert.equal(variants.find((v) => v.bytes === 28_600_000_000)?.variant, 'noMTP-Q8_0')
+})
+
+test('the chosen variant is what gets sized, not the default', async () => {
+  // Sizing the default while the user has picked another is how a 15 GB build
+  // is rejected for not fitting a card that holds it easily.
+  const hub = client({ siblings: REAL_GGUF_REPO })
+  const verdict = await hub.evaluate({
+    repoId: 'JonathanColetti/Qwen3.8-27B-Uncensored-GGUF',
+    variant: 'IQ4_XS',
+    kind: 'chat',
+    engine: 'llamacpp',
+    gpuDisplayName: 'NVIDIA A40',
+    gpuMemoryGb: 48,
+  })
+  assert.equal(verdict.details.weightBytes, 15_300_000_000)
+  assert.equal(verdict.compatible, true)
+})

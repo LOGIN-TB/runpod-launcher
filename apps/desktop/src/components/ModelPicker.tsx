@@ -29,13 +29,15 @@ export function ModelPicker({
   gpu: GpuType | null
   otherSlotBytes: number
   value: string
-  onChange: (repoId: string, verdict: ModelVerdict | null) => void
+  onChange: (repoId: string, verdict: ModelVerdict | null, quantisation: string | null) => void
 }): ReactNode {
   const { t, number } = useI18n()
   const [query, setQuery] = useState(value)
   const [hits, setHits] = useState<ModelHit[]>([])
   const [verdict, setVerdict] = useState<ModelVerdict | null>(null)
   const [checking, setChecking] = useState(false)
+  // Which build of a GGUF repository to load. Null until one is offered.
+  const [variant, setVariant] = useState<string | null>(null)
 
   // A repository id is recognisable on sight, so pasting one skips the search
   // entirely and goes straight to the compatibility check.
@@ -71,11 +73,16 @@ export function ModelPicker({
           gpuDisplayName: gpu.id,
           gpuMemoryGb: gpu.memory,
           otherSlotBytes,
+          ...(variant ? { variant } : {}),
         })
         .then((result) => {
           if (cancelled) return
           setVerdict(result)
-          onChange(query.trim(), result)
+          // Adopt the default the service picked, so the dropdown shows what
+          // was actually sized rather than an empty selection.
+          const chosen = variant ?? defaultVariantOf(result)
+          if (chosen !== variant) setVariant(chosen)
+          onChange(query.trim(), result, chosen)
         })
         .catch(() => {
           if (!cancelled) setVerdict(null)
@@ -90,9 +97,10 @@ export function ModelPicker({
     }
     // `onChange` is intentionally excluded: it is a fresh closure each render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, kind, engine, gpu, otherSlotBytes, connection, looksLikeRepoId])
+  }, [query, kind, engine, gpu, otherSlotBytes, connection, looksLikeRepoId, variant])
 
   const gib = (bytes: number): string => `${number(bytes / 1024 ** 3, { maximumFractionDigits: 1 })} GiB`
+
 
   return (
     <div className="model-picker">
@@ -126,9 +134,33 @@ export function ModelPicker({
         </ul>
       ) : null}
 
+      {/* A GGUF repository is a set of alternatives, not one model: the same
+          weights at a dozen precisions, and often several builds at each. Which
+          one is loaded decides both the size and the quality, so it has to be a
+          choice rather than a guess. */}
+      {verdict?.details.ggufVariants && verdict.details.ggufVariants.length > 1 ? (
+        <Field label={t('model.gguf.pick')} hint={t('model.gguf.pickHint')}>
+          <select
+            className="input"
+            value={variant ?? ''}
+            onChange={(event) => setVariant(event.target.value)}
+          >
+            {verdict.details.ggufVariants
+              .slice()
+              .sort((a, b) => b.bytes - a.bytes)
+              .map((option) => (
+                <option key={option.variant} value={option.variant}>
+                  {option.label}
+                  {option.qualifier ? ` (${option.qualifier})` : ''} — {gib(option.bytes)}
+                </option>
+              ))}
+          </select>
+        </Field>
+      ) : null}
+
       {checking ? <p className="muted small">{t('model.checking')}</p> : null}
 
-      {verdict ? (
+      {verdict && !checking ? (
         <div className={verdict.compatible ? 'verdict verdict-ok' : 'verdict verdict-bad'}>
           <Badge tone={verdict.compatible ? 'running' : 'danger'}>
             {verdict.details.format.toUpperCase()}
@@ -154,4 +186,11 @@ export function ModelPicker({
       ) : null}
     </div>
   )
+}
+
+/** The build the service sized, so the dropdown starts on the right one. */
+function defaultVariantOf(verdict: ModelVerdict): string | null {
+  const variants = verdict.details.ggufVariants
+  if (!variants?.length) return null
+  return variants.find((candidate) => candidate.bytes === verdict.details.weightBytes)?.variant ?? null
 }

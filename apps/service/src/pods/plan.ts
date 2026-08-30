@@ -83,9 +83,13 @@ export function renderArgs(args: string, context: {
   podApiKey: string
 }): string {
   const { template, vram, podApiKey } = context
+  // llama.cpp selects a build with `repo:tag`; vLLM takes the repository alone.
+  const ref = (slot: ModelSlot | null): string =>
+    slot === null ? '' : slot.quantisation ? `${slot.repoId}:${slot.quantisation}` : slot.repoId
+
   const values: Record<string, string> = {
-    chatModel: template.chatModel?.repoId ?? '',
-    embeddingModel: template.embeddingModel?.repoId ?? '',
+    chatModel: ref(template.chatModel),
+    embeddingModel: ref(template.embeddingModel),
     apiKey: podApiKey,
     maxModelLen: template.maxModelLen === undefined ? '' : String(template.maxModelLen),
     maxConcurrentSequences:

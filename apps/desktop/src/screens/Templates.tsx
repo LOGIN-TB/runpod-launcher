@@ -71,6 +71,13 @@ export function Templates({
   )
 }
 
+interface Slot {
+  repoId: string
+  verdict: ModelVerdict | null
+  /** Which GGUF build, when the repository offers several. */
+  quantisation: string | null
+}
+
 /**
  * The editor shows five fields and hides the rest.
  *
@@ -90,8 +97,8 @@ function TemplateEditor({
   const [gpus, setGpus] = useState<GpuType[]>([])
   const [name, setName] = useState('')
   const [gpuId, setGpuId] = useState('')
-  const [chat, setChat] = useState<{ repoId: string; verdict: ModelVerdict | null }>({ repoId: '', verdict: null })
-  const [embedding, setEmbedding] = useState<{ repoId: string; verdict: ModelVerdict | null }>({ repoId: '', verdict: null })
+  const [chat, setChat] = useState<Slot>({ repoId: '', verdict: null, quantisation: null })
+  const [embedding, setEmbedding] = useState<Slot>({ repoId: '', verdict: null, quantisation: null })
   const [useEmbedding, setUseEmbedding] = useState(false)
   const [sleepMode, setSleepMode] = useState<Template['lifecycleMode']>('stopResume')
   const [advanced, setAdvanced] = useState(false)
@@ -176,8 +183,16 @@ function TemplateEditor({
         name,
         engine: preset.engine,
         image: preset.image,
-        chatModel: chat.repoId ? { repoId: chat.repoId } : null,
-        embeddingModel: useEmbedding && embedding.repoId ? { repoId: embedding.repoId } : null,
+        chatModel: chat.repoId
+          ? { repoId: chat.repoId, ...(chat.quantisation ? { quantisation: chat.quantisation } : {}) }
+          : null,
+        embeddingModel:
+          useEmbedding && embedding.repoId
+            ? {
+                repoId: embedding.repoId,
+                ...(embedding.quantisation ? { quantisation: embedding.quantisation } : {}),
+              }
+            : null,
         gpuTypeId: gpu!.id,
         gpuFallbackIds: fallbacks,
         maxModelLen: Number(maxLen),
@@ -222,7 +237,7 @@ function TemplateEditor({
         gpu={gpu}
         otherSlotBytes={embeddingBytes}
         value={chat.repoId}
-        onChange={(repoId, verdict) => setChat({ repoId, verdict })}
+        onChange={(repoId, verdict, quantisation) => setChat({ repoId, verdict, quantisation })}
       />
 
       <label className="toggle">
@@ -238,7 +253,7 @@ function TemplateEditor({
           gpu={gpu}
           otherSlotBytes={chatBytes}
           value={embedding.repoId}
-          onChange={(repoId, verdict) => setEmbedding({ repoId, verdict })}
+          onChange={(repoId, verdict, quantisation) => setEmbedding({ repoId, verdict, quantisation })}
         />
       ) : null}
 
