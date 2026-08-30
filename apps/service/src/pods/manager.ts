@@ -66,12 +66,8 @@ export class PodManager {
     const existing = this.current()
 
     if (existing && template.lifecycleMode === 'stopResume') {
-      const pod = await client.podAction(existing.id, 'start')
-      // RunPod warns a resumed pod can come back with no GPU at all. Left
-      // unhandled, that is a pod that bills for storage and serves nothing.
-      if ((pod.gpu?.count ?? 0) > 0) return this.record(pod, template.id)
-      await client.podAction(existing.id, 'terminate').catch(() => undefined)
-      this.markStopped(existing.id)
+      const resumed = await this.tryResume(client, existing.id, template.id)
+      if (resumed) return resumed
     }
 
     this.podApiKey = generateToken()
@@ -136,6 +132,39 @@ export class PodManager {
           { cause: lastError },
         )
       : new Error('Pod creation failed for an unknown reason')
+  }
+
+  /**
+   * Attempts to wake the pod we already have. Returns null when it cannot be
+   * resumed, in which case the caller builds a fresh one.
+   *
+   * Two ways that happens, both seen in practice:
+   *  - The pod is gone. Somebody terminated it in RunPod's own console, or it
+   *    was cleaned up. Our record outlives it, and resuming a ghost 404s.
+   *  - It comes back with no GPU. RunPod hands back zero GPUs when capacity has
+   *    moved on, leaving a pod that bills for storage and serves nothing.
+   */
+  private async tryResume(
+    client: RunpodClient,
+    podId: string,
+    templateId: string,
+  ): Promise<PodRecord | null> {
+    let pod: runpod.Pod
+    try {
+      pod = await client.podAction(podId, 'start')
+    } catch (error) {
+      if (error instanceof RunpodError && error.status === 404) {
+        this.markStopped(podId)
+        return null
+      }
+      throw error
+    }
+
+    if ((pod.gpu?.count ?? 0) > 0) return this.record(pod, templateId)
+
+    await client.podAction(podId, 'terminate').catch(() => undefined)
+    this.markStopped(podId)
+    return null
   }
 
   async stop(mode: Template['lifecycleMode']): Promise<void> {

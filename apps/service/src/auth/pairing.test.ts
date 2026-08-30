@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import Database from 'better-sqlite3'
 import { openDatabase } from '../store/db.js'
+import { generateToken } from '../store/crypto.js'
 import { TokenStore } from './tokens.js'
 import { PairingService } from './pairing.js'
 
@@ -63,4 +64,15 @@ test('a revoked token stops working', () => {
   assert.ok(tokens.verify('client_tokens', issued.token))
   tokens.revoke('client_tokens', issued.id)
   assert.equal(tokens.verify('client_tokens', issued.token), null)
+})
+
+test('a generated token never begins with a character a CLI reads as a flag', () => {
+  // Regression guard: base64url can start with '-', and `--api-key -Xabc...`
+  // makes vLLM refuse to start. It hits about one token in 32, so it looks
+  // like a flaky pod rather than a bug.
+  for (let i = 0; i < 2000; i += 1) {
+    const token = generateToken()
+    assert.match(token[0]!, /[A-Za-z0-9]/, `token started with ${JSON.stringify(token[0])}`)
+    assert.ok(token.length >= 43)
+  }
 })

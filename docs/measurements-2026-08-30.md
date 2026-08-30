@@ -81,10 +81,58 @@ where capacity is scarcest. Stop-and-resume keeps the machine assignment —
 RunPod's own API documents that a stopped pod "resumes onto the same host" — and
 is the safer default despite the doubled idle storage rate.
 
+## Quantisation: 4-bit beats 8-bit here, clearly
+
+Measured after the first run, same L40S 48 GB, same engine, same prompt.
+
+| | `Qwen/Qwen3.8-27B-FP8` | `RedHatAI/Qwen3.8-27B-INT4` |
+|---|---|---|
+| Weights on the card | 28.51 GiB | **17.71 GiB** |
+| KV cache | 134,106 tokens | **273,673 tokens** |
+| Concurrency at 16k | 8.19x | **16.70x** |
+| Generation, single request | 18.2 tok/s | **41.1 tok/s** |
+| Engine init | 140.8 s | **102.5 s** |
+
+INT4 is **2.3x faster with twice the context** on identical hardware. Both
+answered a German arithmetic prompt correctly; no quality problem showed up at
+this depth, though this is a sanity check, not a benchmark.
+
+Note the repository sizes: 4-bit builds are 19.5–21 GB rather than the ~15 GB a
+naive 4-bit of 27B would suggest, because the Gated DeltaNet projections and the
+vision tower stay in BF16. Only the Linear modules are quantised.
+
+### Do not compare across cards
+
+The same INT4 model on an RTX PRO 4500 Blackwell 32 GB managed only **9.7 tok/s**
+— less than a quarter of the same weights on an L40S. It is a much smaller card,
+not a quantisation effect. Measuring INT4 on the 32 GB card first produced
+exactly the wrong conclusion, and only re-running on the original card revealed
+it. Any future engine or quantisation comparison has to hold the GPU fixed.
+
+The 32 GB card is still interesting for a different reason: FP8 at 30.9 GB does
+not fit there at all, 4-bit at 19.5 GB does, and it was the only card above `LOW`
+availability that day.
+
+### 5-bit and 6-bit do not exist here
+
+Those are GGUF levels, which belong to llama.cpp. vLLM serves FP8, INT8, AWQ and
+GPTQ/compressed-tensors INT4. Wanting 5- or 6-bit means changing engine, not
+changing a flag.
+
 ## Also observed
 
-- The model streams its reasoning into `content`. It is a thinking model, so a
-  reasoning parser is needed or clients receive the raw deliberation.
+- The model streams its reasoning into `content`, terminated by `</think>`. A
+  `--reasoning-parser` moves it into a separate field; without one, clients get
+  the raw deliberation in the answer.
+- A generated bearer token starting with `-` breaks the pod: `--api-key -Xabc…`
+  makes vLLM exit with "expected at least one argument", and the container
+  crash-loops. base64url produces one about every 32 tokens, so it presents as
+  an intermittent fault.
+- A pod terminated in RunPod's own console leaves the launcher holding a record
+  for it; resuming that ghost returns 404 and must fall through to a rebuild.
+- One pod sat at 0% GPU and 0% CPU for twelve minutes with `dataCenterId: null`
+  and never recovered. Terminating and recreating fixed it. A start needs a
+  watchdog, not just a status poll.
 - `GET /v2/pods/{id}/logs` streams and does not terminate on its own; the client
   must impose a deadline.
 - Without `HF_TOKEN`, HuggingFace warns about rate limits and downloads slower.

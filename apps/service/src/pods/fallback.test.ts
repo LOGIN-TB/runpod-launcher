@@ -87,3 +87,39 @@ test('a network volume forbids unpinning, and the error says why', async () => {
   )
   assert.equal(seen.length, 3, 'three cards tried, no unpinned attempt')
 })
+
+/** A fetch where the pod record exists locally but is gone at RunPod. */
+const fetchWithVanishedPod = (created: string[]): typeof fetch =>
+  (async (url: unknown, init?: RequestInit) => {
+    const u = String(url)
+    if (/\/pods\/[^/]+\/action$/.test(u)) {
+      return new Response('{"detail":"pod not found","status":404}', { status: 404 })
+    }
+    if (u.endsWith('/v2/pods') && init?.method === 'POST') {
+      created.push('created')
+      return new Response(
+        JSON.stringify({ id: 'fresh-pod', status: 'RUNNING', cost: 0.99, startedAt: null }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }
+    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as unknown as typeof fetch
+
+test('a pod deleted outside the launcher is replaced, not resumed into a 404', async () => {
+  const created: string[] = []
+  const db = openDatabase(':memory:')
+  const now = new Date().toISOString()
+  const tpl = template({ lifecycleMode: 'stopResume' })
+  db.prepare('INSERT INTO templates (id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+    .run('t1', 'test', JSON.stringify(tpl), now, now)
+  // A pod the launcher still believes in, which no longer exists at RunPod —
+  // what happens when someone terminates it from RunPod's own console.
+  db.prepare('INSERT INTO pods (id, template_id, status, cost_per_hour, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run('ghost-pod', 't1', 'EXITED', 0.99, now)
+
+  const manager = new PodManager(db, () => new RunpodClient('key', fetchWithVanishedPod(created)), () => null)
+  const record = await manager.start(tpl)
+
+  assert.equal(record.id, 'fresh-pod')
+  assert.equal(created.length, 1, 'a replacement pod was built')
+})

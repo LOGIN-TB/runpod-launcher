@@ -57,9 +57,21 @@ export function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB)
 }
 
-/** A URL-safe random token. 32 bytes is 256 bits of entropy. */
+/**
+ * A URL-safe random token. 32 bytes is 256 bits of entropy.
+ *
+ * The first character is forced to be alphanumeric. base64url's alphabet
+ * includes `-`, and a token starting with one is read as a flag when it is
+ * passed on a command line: `--api-key -Xinme...` makes vLLM fail with
+ * "expected at least one argument" and the pod crash-loops. It happens to
+ * roughly one token in 32, which makes it look intermittent rather than broken.
+ */
 export function generateToken(bytes = 32): string {
-  return randomBytes(bytes).toString('base64url')
+  const alphanumeric = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+  const raw = randomBytes(bytes)
+  const token = raw.toString('base64url')
+  const first = alphanumeric[raw[0]! % alphanumeric.length]!
+  return first + token.slice(1)
 }
 
 /**
