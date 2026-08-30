@@ -125,9 +125,82 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps)
     return reply.code(201).send(parsed.data)
   })
 
+  /**
+   * GPU catalog with live availability.
+   *
+   * Availability is deliberately not cached. Capacity for the affordable 48 GB
+   * cards sits at LOW and shifts within minutes; a stale "available" is how the
+   * nightly rebuild silently fails to come back up.
+   */
+  app.get('/catalog/gpus', async (request, reply) => {
+    if (!(await requireDevice(request, reply))) return
+    try {
+      const { gpus } = await deps.requireRunpodKey().listGpuTypes({ availability: true })
+      return reply.send({ gpus })
+    } catch (error) {
+      return reply.code(502).send({ error: (error as Error).message })
+    }
+  })
+
+  app.get('/catalog/datacenters', async (request, reply) => {
+    if (!(await requireDevice(request, reply))) return
+    try {
+      const { dataCenters } = await deps.requireRunpodKey().listDataCenters()
+      return reply.send({ dataCenters })
+    } catch (error) {
+      return reply.code(502).send({ error: (error as Error).message })
+    }
+  })
+
+  app.get('/network-volumes', async (request, reply) => {
+    if (!(await requireDevice(request, reply))) return
+    try {
+      const { networkVolumes } = await deps.requireRunpodKey().listNetworkVolumes()
+      return reply.send({ networkVolumes })
+    } catch (error) {
+      return reply.code(502).send({ error: (error as Error).message })
+    }
+  })
+
+  /**
+   * Creates a network volume. This is the one action here that commits the user
+   * to a recurring charge and pins every future pod to one data center, so it
+   * is logged with its full parameters.
+   */
+  app.post('/network-volumes', async (request, reply) => {
+    const device = await requireDevice(request, reply)
+    if (!device) return
+
+    const body = request.body as { name?: string; size?: number; dataCenter?: string } | undefined
+    if (!body?.name || !body.size || !body.dataCenter) {
+      return reply.code(400).send({ error: 'name, size and dataCenter are required' })
+    }
+    try {
+      const volume = await deps
+        .requireRunpodKey()
+        .createNetworkVolume({ name: body.name, size: body.size, dataCenter: body.dataCenter })
+      audit(device.id, 'networkVolume.created', body, request.ip)
+      return reply.code(201).send(volume)
+    } catch (error) {
+      return reply.code(502).send({ error: (error as Error).message })
+    }
+  })
+
   app.get('/pod', async (request, reply) => {
     if (!(await requireDevice(request, reply))) return
-    return reply.send({ pod: pods.current(), serving: pods.describe() })
+    const serving = pods.describe()
+    return reply.send({
+      pod: pods.current(),
+      // `describe()` carries the pod's own bearer token because the gateway
+      // needs it to reach vLLM. It must never travel further than that — a
+      // client holding it could talk to the pod directly, outside the gateway,
+      // with no usage record and no way to revoke it short of a rebuild.
+      serving: serving && {
+        chatUrl: serving.chatUrl,
+        embeddingUrl: serving.embeddingUrl,
+        servedModels: serving.servedModels,
+      },
+    })
   })
 
   app.post('/pod/start', async (request, reply) => {

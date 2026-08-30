@@ -11,6 +11,20 @@ export class RunpodError extends Error {
     super(`RunPod ${operation} failed: ${status} ${body.slice(0, 300)}`)
     this.name = 'RunpodError'
   }
+
+  /**
+   * True when RunPod had no matching machine free.
+   *
+   * This is not an edge case. Capacity for the affordable 48 GB cards is thin
+   * and moves within minutes — an L40S reported as HIGH availability was gone
+   * three minutes later in testing. Anything that pins placement (a network
+   * volume ties every pod to one data center) makes it far more likely.
+   *
+   * Callers must treat it as "try somewhere else", not as a failure.
+   */
+  get isCapacityExhausted(): boolean {
+    return this.status === 400 && /no longer any instances available/i.test(this.body)
+  }
 }
 
 type Operation = keyof typeof OPERATIONS
@@ -102,12 +116,27 @@ export class RunpodClient {
     return this.call('getPodLogs', { params: { id } })
   }
 
-  listGpuTypes(): Promise<{ gpuTypes: runpod.GpuType[] }> {
-    return this.call('listGpuTypes')
+  /**
+   * GPU catalog. `include=AVAILABILITY` is worth the extra field: capacity for
+   * the affordable 48 GB cards is thin and moves within minutes, so a stored
+   * answer goes stale fast — always ask before starting a pod.
+   */
+  listGpuTypes(options: { availability?: boolean } = {}): Promise<{ gpus: runpod.GpuType[] }> {
+    return this.call('listGpuTypes', {
+      query: options.availability ? { include: 'AVAILABILITY', product: 'POD', count: 1 } : {},
+    })
   }
 
   listDataCenters(): Promise<{ dataCenters: runpod.DataCenter[] }> {
     return this.call('listDataCenters')
+  }
+
+  /** One data center, optionally with which GPUs it currently has. */
+  getDataCenter(id: string, options: { gpuAvailability?: boolean } = {}): Promise<runpod.DataCenter> {
+    return this.call('getDataCenter', {
+      params: { id },
+      query: options.gpuAvailability ? { include: 'GPU_AVAILABILITY' } : {},
+    })
   }
 
   listNetworkVolumes(): Promise<{ networkVolumes: runpod.NetworkVolume[] }> {

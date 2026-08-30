@@ -60,6 +60,14 @@ export const templateSchema = z
     embeddingModel: modelSlotSchema.nullable().default(null),
 
     gpuTypeId: z.string().min(1),
+    /**
+     * Cards to fall back to, in order, when the preferred one has no capacity.
+     *
+     * Not a nicety: in testing, every 48 GB card on RunPod sat at LOW
+     * availability, and a start pinned to one card and one data center failed
+     * outright. A schedule that wakes a pod at 07:00 needs somewhere else to go.
+     */
+    gpuFallbackIds: z.array(z.string()).default([]),
     gpuCount: z.number().int().min(1).default(1),
     cloud: z.enum(['SECURE', 'COMMUNITY']).default('SECURE'),
     dataCenterIds: z.array(z.string()).default([]),
@@ -70,6 +78,34 @@ export const templateSchema = z
 
     /** Context window. Left unset, the engine's own default applies. */
     maxModelLen: z.number().int().positive().optional(),
+
+    /**
+     * Maximum concurrent sequences the engine will admit.
+     *
+     * Worth setting explicitly for hybrid-attention models. Qwen3.8's Gated
+     * DeltaNet layers need one recurrent cache block *per concurrent sequence*,
+     * and that budget comes out of whatever VRAM the weights leave behind. On a
+     * 48 GB card with 28.5 GB of weights only 211 blocks fit, so vLLM's default
+     * of 256 makes the engine refuse to start:
+     *
+     *   ValueError: max_num_seqs (256) exceeds available Mamba cache blocks (211)
+     *
+     * Measured on an L40S, 2026-08-30. A plain transformer has no such limit,
+     * which is why the default is left unset rather than lowered for everyone.
+     */
+    maxConcurrentSequences: z.number().int().positive().optional(),
+
+    /**
+     * Arguments appended to the image's entrypoint, with placeholders filled in:
+     * `{{chatModel}}`, `{{embeddingModel}}`, `{{apiKey}}`, `{{maxModelLen}}`,
+     * `{{chatGpuFraction}}`, `{{embeddingGpuFraction}}`, `{{mountPath}}`.
+     *
+     * The launcher's own pod image needs none of this — it reads environment
+     * variables. This exists so a stock image (`vllm/vllm-openai`, whose
+     * entrypoint is `vllm serve`) or any other inference server can be used
+     * without building anything first.
+     */
+    args: z.string().optional(),
     env: z.record(z.string(), z.string()).default({}),
 
     lifecycleMode: lifecycleModeSchema.default('recreate'),

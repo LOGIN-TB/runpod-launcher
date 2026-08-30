@@ -1,7 +1,7 @@
 import { templateSchema, type Template, type runpod } from '@runpod-launcher/shared'
 import type { Db } from '../store/db.js'
 import { generateToken } from '../store/crypto.js'
-import { podProxyUrl, RunpodClient } from '../runpod/client.js'
+import { podProxyUrl, RunpodClient, RunpodError } from '../runpod/client.js'
 import { podRoleUrls, type ActivePod } from '../gateway/routes.js'
 import { buildCreatePodRequest } from './plan.js'
 
@@ -75,14 +75,67 @@ export class PodManager {
     }
 
     this.podApiKey = generateToken()
-    const pod = await client.createPod(
-      buildCreatePodRequest({
-        template,
-        podApiKey: this.podApiKey,
-        huggingfaceToken: this.huggingfaceToken(),
-      }),
-    )
+    const pod = await this.createWithFallback(client, template, this.podApiKey)
     return this.record(pod, template.id)
+  }
+
+  /**
+   * Creates the pod, walking through the template's fallback cards when RunPod
+   * reports no capacity.
+   *
+   * Measured on 2026-08-30: every 48 GB card was at LOW availability, and an
+   * L40S that the catalog called HIGH was unavailable three minutes later.
+   * Pinning a data center — which a network volume forces — turned that into an
+   * outright failure, while the same request unpinned succeeded immediately.
+   * So the last resort is to drop the data center preference rather than leave
+   * the user with no pod at all.
+   */
+  private async createWithFallback(
+    client: RunpodClient,
+    template: Template,
+    podApiKey: string,
+  ): Promise<runpod.Pod> {
+    const attempts: Array<{ gpuTypeId: string; unpinned: boolean }> = [
+      ...[template.gpuTypeId, ...template.gpuFallbackIds].map((gpuTypeId) => ({
+        gpuTypeId,
+        unpinned: false,
+      })),
+    ]
+    // Dropping the data center is only possible without a network volume: the
+    // volume exists in exactly one region and the pod must be able to reach it.
+    if (!template.networkVolumeId && template.dataCenterIds.length > 0) {
+      attempts.push({ gpuTypeId: template.gpuTypeId, unpinned: true })
+    }
+
+    let lastError: unknown
+    for (const attempt of attempts) {
+      const candidate: Template = {
+        ...template,
+        gpuTypeId: attempt.gpuTypeId,
+        ...(attempt.unpinned ? { dataCenterIds: [] } : {}),
+      }
+      try {
+        return await client.createPod(
+          buildCreatePodRequest({
+            template: candidate,
+            podApiKey,
+            huggingfaceToken: this.huggingfaceToken(),
+          }),
+        )
+      } catch (error) {
+        if (!(error instanceof RunpodError) || !error.isCapacityExhausted) throw error
+        lastError = error
+      }
+    }
+    throw lastError instanceof Error
+      ? new Error(
+          `No capacity for ${[template.gpuTypeId, ...template.gpuFallbackIds].join(', ')}` +
+            (template.networkVolumeId
+              ? ` in the network volume's data center. Add fallback GPUs, or drop the volume so placement can move.`
+              : `. Add fallback GPUs to the template.`),
+          { cause: lastError },
+        )
+      : new Error('Pod creation failed for an unknown reason')
   }
 
   async stop(mode: Template['lifecycleMode']): Promise<void> {

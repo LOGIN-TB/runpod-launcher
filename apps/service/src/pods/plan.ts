@@ -59,6 +59,9 @@ export function buildPodEnv(args: {
   if (vram.chat !== null) env.LAUNCHER_CHAT_GPU_FRACTION = String(vram.chat)
   if (vram.embedding !== null) env.LAUNCHER_EMBED_GPU_FRACTION = String(vram.embedding)
   if (template.maxModelLen !== undefined) env.LAUNCHER_CHAT_MAX_LEN = String(template.maxModelLen)
+  if (template.maxConcurrentSequences !== undefined) {
+    env.LAUNCHER_CHAT_MAX_SEQS = String(template.maxConcurrentSequences)
+  }
 
   return env
 }
@@ -68,6 +71,30 @@ function addSlot(env: Record<string, string>, prefix: 'CHAT' | 'EMBED', slot: Mo
   env[`LAUNCHER_${prefix}_MODEL`] = slot.repoId
   if (slot.revision) env[`LAUNCHER_${prefix}_REVISION`] = slot.revision
   if (slot.servedName) env[`LAUNCHER_${prefix}_SERVED_NAME`] = slot.servedName
+}
+
+/**
+ * Fills placeholders in a template's `args`. The pod API key is substituted
+ * here rather than stored, so it never lands in the template record.
+ */
+export function renderArgs(args: string, context: {
+  template: Template
+  vram: VramSplit
+  podApiKey: string
+}): string {
+  const { template, vram, podApiKey } = context
+  const values: Record<string, string> = {
+    chatModel: template.chatModel?.repoId ?? '',
+    embeddingModel: template.embeddingModel?.repoId ?? '',
+    apiKey: podApiKey,
+    maxModelLen: template.maxModelLen === undefined ? '' : String(template.maxModelLen),
+    maxConcurrentSequences:
+      template.maxConcurrentSequences === undefined ? '' : String(template.maxConcurrentSequences),
+    chatGpuFraction: vram.chat === null ? '' : String(vram.chat),
+    embeddingGpuFraction: vram.embedding === null ? '' : String(vram.embedding),
+    mountPath: template.networkVolumeMountPath,
+  }
+  return args.replace(/\{\{(\w+)\}\}/g, (whole, key: string) => values[key] ?? whole)
 }
 
 /** Turns a template into the exact body RunPod's createPod expects. */
@@ -92,6 +119,7 @@ export function buildCreatePodRequest(args: {
     ports: [`${POD_PORTS.chat}/http`, `${POD_PORTS.embedding}/http`],
   }
 
+  if (template.args) request.args = renderArgs(template.args, { template, vram, podApiKey })
   if (template.dataCenterIds.length > 0) request.dataCenterIds = template.dataCenterIds
 
   if (template.networkVolumeId) {

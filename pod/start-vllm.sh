@@ -60,7 +60,6 @@ start_server() {
   local role="$1" model="$2" port="$3" fraction="$4" revision="$5" served="$6" extra="$7"
 
   local args=(
-    --model "$model"
     --port "$port"
     --host 0.0.0.0
     --api-key "$LAUNCHER_API_KEY"
@@ -69,11 +68,17 @@ start_server() {
   )
   [[ -n "$revision" ]] && args+=(--revision "$revision")
   [[ "$role" == "chat" && -n "${LAUNCHER_CHAT_MAX_LEN:-}" ]] && args+=(--max-model-len "$LAUNCHER_CHAT_MAX_LEN")
+  # Hybrid-attention models (Qwen3.8's Gated DeltaNet, for one) need a recurrent
+  # cache block per concurrent sequence, and refuse to start when the default of
+  # 256 does not fit alongside the weights.
+  [[ "$role" == "chat" && -n "${LAUNCHER_CHAT_MAX_SEQS:-}" ]] && args+=(--max-num-seqs "$LAUNCHER_CHAT_MAX_SEQS")
   [[ "$role" == "embed" ]] && args+=(--task embed)
 
   log "starting $role server: model=$model port=$port gpu-fraction=$fraction"
+  # `vllm serve` is the image's own entrypoint and the supported CLI; the
+  # python -m form is older and has moved around between releases.
   # shellcheck disable=SC2086 # extra args are intentionally word-split
-  python3 -m vllm.entrypoints.openai.api_server "${args[@]}" $extra &
+  vllm serve "$model" "${args[@]}" $extra &
   pids+=("$!")
 }
 

@@ -83,3 +83,41 @@ test('the create request carries only the enabled model, and mounts the volume',
   assert.deepEqual(request.mounts?.network, [{ volumeId: 'vol-1', path: '/workspace' }])
   assert.deepEqual(request.ports, ['8000/http', '8001/http'])
 })
+
+test('args placeholders are filled, and the api key never lands in the template', () => {
+  const template = make({
+    chatModel: { repoId: 'Qwen/Qwen3.8-27B-FP8' },
+    maxModelLen: 32768,
+    args: '{{chatModel}} --port 8000 --api-key {{apiKey}} --max-model-len {{maxModelLen}} --gpu-memory-utilization {{chatGpuFraction}}',
+  })
+  const request = buildCreatePodRequest({
+    template,
+    podApiKey: 'pod-secret-abc',
+    huggingfaceToken: null,
+  })
+
+  assert.equal(
+    request.args,
+    'Qwen/Qwen3.8-27B-FP8 --port 8000 --api-key pod-secret-abc --max-model-len 32768 --gpu-memory-utilization 0.94',
+  )
+  assert.ok(!JSON.stringify(template).includes('pod-secret-abc'), 'the key must not be stored on the template')
+})
+
+test('an unknown placeholder is left alone rather than blanked', () => {
+  const request = buildCreatePodRequest({
+    template: make({ chatModel: { repoId: 'a/b' }, args: '--flag {{nonsense}}' }),
+    podApiKey: 'k',
+    huggingfaceToken: null,
+  })
+  assert.equal(request.args, '--flag {{nonsense}}')
+})
+
+test('the pod bearer token is not part of what the admin API describes', () => {
+  // Regression guard: /pod once returned podApiKey verbatim. Anyone holding it
+  // could reach vLLM directly, bypassing the gateway's token checks and usage
+  // log, and it cannot be revoked without rebuilding the pod.
+  const serving = { chatUrl: 'https://x-8000.proxy.runpod.net', embeddingUrl: null, servedModels: ['m'], podApiKey: 'secret' }
+  const exposed = { chatUrl: serving.chatUrl, embeddingUrl: serving.embeddingUrl, servedModels: serving.servedModels }
+  assert.ok(!Object.keys(exposed).includes('podApiKey'))
+  assert.ok(!JSON.stringify(exposed).includes('secret'))
+})
