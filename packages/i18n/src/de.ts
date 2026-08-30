@@ -112,6 +112,10 @@ export const de = {
   'template.gpu': 'Grafikkarte',
   'template.advanced': 'Erweitert',
   'template.contextLength': 'Kontextlänge',
+  'template.contextLengthHint': 'Wie viel Gespräch eine einzelne Anfrage mitbringen darf. Agenten brauchen viel: ein Coding-Assistent schickt in der ersten Nachricht schon mal zwanzigtausend Token.',
+  'template.concurrency': 'Gleichzeitige Anfragen',
+  'template.concurrencyHint.vllm': 'Wie viele Anfragen parallel laufen dürfen. Hybrid-Modelle brauchen je einen Cache-Block, und vLLMs Vorgabe von 256 passt nicht immer.',
+  'template.concurrencyHint.llamacpp': 'Wie viele Anfragen parallel laufen dürfen. llama.cpp teilt ein gemeinsames Kontextbudget unter ihnen auf — jeder zusätzliche Platz kostet Speicher, und zu viele lassen jeder Anfrage fast keinen Kontext übrig.',
   'template.sleepMode': 'Im Leerlauf',
   'template.sleepStopResume': 'Anhalten und fortsetzen',
   'template.sleepStopResumeHint':

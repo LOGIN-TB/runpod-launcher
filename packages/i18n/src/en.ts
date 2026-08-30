@@ -107,6 +107,10 @@ export const en = {
   'template.gpu': 'Graphics card',
   'template.advanced': 'Advanced',
   'template.contextLength': 'Context length',
+  'template.contextLengthHint': 'How much of a conversation one request may carry. Agents need a lot: a coding assistant can send twenty thousand tokens in its first message.',
+  'template.concurrency': 'Requests at once',
+  'template.concurrencyHint.vllm': 'How many requests may run in parallel. Hybrid-attention models need one cache block each, and vLLM’s default of 256 does not always fit.',
+  'template.concurrencyHint.llamacpp': 'How many requests may run in parallel. llama.cpp splits one context budget between them, so every extra slot costs memory — and too many leave each request with almost no context at all.',
   'template.sleepMode': 'When idle',
   'template.sleepStopResume': 'Pause and resume',
   'template.sleepStopResumeHint':

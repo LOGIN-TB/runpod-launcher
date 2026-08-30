@@ -94,6 +94,16 @@ export function renderArgs(args: string, context: {
     maxModelLen: template.maxModelLen === undefined ? '' : String(template.maxModelLen),
     maxConcurrentSequences:
       template.maxConcurrentSequences === undefined ? '' : String(template.maxConcurrentSequences),
+    /**
+     * Context across all slots together, for engines that share one budget.
+     *
+     * vLLM's `--max-model-len` is per request and independent of how many run
+     * at once. llama.cpp's `--ctx-size` is the total, divided by `--parallel`.
+     * Passing the same number to both gave 16384/64 = 256 tokens per request,
+     * and every agent failed with "request exceeds the available context size
+     * (256 tokens)" on its first message.
+     */
+    totalContext: String((template.maxModelLen ?? 8192) * (template.maxConcurrentSequences ?? 1)),
     chatGpuFraction: vram.chat === null ? '' : String(vram.chat),
     embeddingGpuFraction: vram.embedding === null ? '' : String(vram.embedding),
     mountPath: template.networkVolumeMountPath,

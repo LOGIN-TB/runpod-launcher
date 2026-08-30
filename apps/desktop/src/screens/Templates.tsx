@@ -195,6 +195,9 @@ function TemplateEditor({
   })
   const [maxLen, setMaxLen] = useState(String(existing?.maxModelLen ?? 16384))
   const [maxSeqs, setMaxSeqs] = useState(String(existing?.maxConcurrentSequences ?? 64))
+  // Whether the user has set the number themselves; until they do it follows
+  // the engine, because the two spend memory very differently.
+  const [seqsTouched, setSeqsTouched] = useState(existing !== null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -252,6 +255,15 @@ function TemplateEditor({
   // to.
   const chosenFallbacks = fallbackOverride ?? fallbacks.slice(0, 3)
 
+  /**
+   * Concurrent requests, defaulted per engine.
+   *
+   * llama.cpp divides one context budget between slots, so 64 slots of a
+   * 16k window would ask for a million tokens of cache — and in practice gave
+   * each request 256 tokens. vLLM's limit is independent of the window.
+   */
+  const effectiveSeqs = seqsTouched ? maxSeqs : String(preset.defaultConcurrency)
+
   const blocked =
     !name ||
     !gpu ||
@@ -280,7 +292,7 @@ function TemplateEditor({
         gpuTypeId: gpu!.id,
         gpuFallbackIds: chosenFallbacks,
         maxModelLen: Number(maxLen),
-        maxConcurrentSequences: Number(maxSeqs),
+        maxConcurrentSequences: Number(effectiveSeqs),
         lifecycleMode: sleepMode,
         schedule,
         networkVolumeId: null,
@@ -415,14 +427,18 @@ function TemplateEditor({
 
       {advanced ? (
         <div className="row">
-          <Field label={t('template.contextLength')}>
+          <Field label={t('template.contextLength')} hint={t('template.contextLengthHint')}>
             <Input type="number" value={maxLen} onChange={(event) => setMaxLen(event.target.value)} />
           </Field>
-          <Field
-            label="max-num-seqs"
-            hint="Hybrid-attention models need one cache block per concurrent request; vLLM's default of 256 does not always fit."
-          >
-            <Input type="number" value={maxSeqs} onChange={(event) => setMaxSeqs(event.target.value)} />
+          <Field label={t('template.concurrency')} hint={t(`template.concurrencyHint.${preset.engine}` as const)}>
+            <Input
+              type="number"
+              value={effectiveSeqs}
+              onChange={(event) => {
+                setSeqsTouched(true)
+                setMaxSeqs(event.target.value)
+              }}
+            />
           </Field>
         </div>
       ) : null}

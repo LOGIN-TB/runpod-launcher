@@ -145,3 +145,36 @@ test('without a quantisation the repository is passed bare, as vLLM expects', ()
   })
   assert.match(request.args!, /^Qwen\/Qwen3\.8-27B-FP8 /)
 })
+
+test('llama.cpp gets the total context, not the per-request one', () => {
+  // The failure this comes from: --ctx-size 16384 --parallel 64 gave each slot
+  // 16384/64 = 256 tokens, and every agent failed on its first message with
+  // "request (17906 tokens) exceeds the available context size (256 tokens)".
+  const request = buildCreatePodRequest({
+    template: make({
+      engine: 'llamacpp',
+      chatModel: { repoId: 'a/b', quantisation: 'Q4_K_M' },
+      maxModelLen: 16384,
+      maxConcurrentSequences: 4,
+      args: '--ctx-size {{totalContext}} --parallel {{maxConcurrentSequences}}',
+    }),
+    podApiKey: 'k',
+    huggingfaceToken: null,
+  })
+  // Four slots of 16384 each.
+  assert.equal(request.args, '--ctx-size 65536 --parallel 4')
+})
+
+test('vLLM keeps the per-request figure, because its budget is not shared', () => {
+  const request = buildCreatePodRequest({
+    template: make({
+      chatModel: { repoId: 'a/b' },
+      maxModelLen: 16384,
+      maxConcurrentSequences: 64,
+      args: '--max-model-len {{maxModelLen}} --max-num-seqs {{maxConcurrentSequences}}',
+    }),
+    podApiKey: 'k',
+    huggingfaceToken: null,
+  })
+  assert.equal(request.args, '--max-model-len 16384 --max-num-seqs 64')
+})

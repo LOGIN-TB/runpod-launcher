@@ -3,6 +3,7 @@ import { loadConfig } from './config.js'
 import { openDatabase } from './store/db.js'
 import { decryptSecret, encryptSecret, generatePairingCode, loadOrCreateMasterKey } from './store/crypto.js'
 import { SettingsStore } from './store/settings.js'
+import { migrateTemplates } from './store/migrate-templates.js'
 import { TokenStore } from './auth/tokens.js'
 import { RunpodClient } from './runpod/client.js'
 import { PodManager } from './pods/manager.js'
@@ -28,6 +29,10 @@ const app = Fastify({
 const db = openDatabase(config.databasePath)
 const masterKey = loadOrCreateMasterKey(config.masterKeyPath)
 const settings = new SettingsStore(db, masterKey)
+
+// Templates carry the arguments they were created with, so a corrected preset
+// does not reach the ones that already exist.
+migrateTemplates(db, (message) => app.log.warn({}, message))
 const tokens = new TokenStore(db)
 
 const requireRunpodKey = (): RunpodClient => {

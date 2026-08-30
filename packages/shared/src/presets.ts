@@ -9,20 +9,26 @@ import type { Engine, WeightFormat } from './engine.js'
  * argument the engine does not know.
  *
  * `args` uses the same placeholders as a template: `{{chatModel}}`,
- * `{{apiKey}}`, `{{maxModelLen}}`, `{{chatGpuFraction}}`,
+ * `{{apiKey}}`, `{{maxModelLen}}`, `{{totalContext}}`, `{{chatGpuFraction}}`,
  * `{{maxConcurrentSequences}}`, `{{mountPath}}`.
+ *
+ * Note that the same template setting means different things to the two
+ * engines, which is why they cannot share one argument string.
  */
 export interface EnginePreset {
   engine: Engine
   image: string
   chatArgs: string
   embeddingArgs: string
+  /** Sensible number of concurrent requests for this engine. */
+  defaultConcurrency: number
   /** Shown in the editor so the choice is not silent. */
   note: string
 }
 
 export const VLLM_PRESET: EnginePreset = {
   engine: 'vllm',
+  defaultConcurrency: 64,
   // Pinned deliberately: `latest` has broken freshly released architectures.
   image: 'vllm/vllm-openai:v0.28.0',
   chatArgs:
@@ -38,11 +44,21 @@ export const VLLM_PRESET: EnginePreset = {
 export const LLAMACPP_PRESET: EnginePreset = {
   engine: 'llamacpp',
   image: 'ghcr.io/ggml-org/llama.cpp:server-cuda',
+  /**
+   * Concurrent requests multiply memory here, because each slot is given its
+   * own share of the shared context. vLLM's default of 64 would ask for a
+   * million tokens of cache; four is a sane starting point for one person and
+   * their agents.
+   */
+  defaultConcurrency: 4,
   // llama-server takes a HuggingFace repo directly with -hf, and picks the
   // quantisation from the tag after the colon.
+  // `--ctx-size` is the budget for all slots together, so it is the per-request
+  // window multiplied by the number of slots. Passing the per-request figure
+  // straight through left each slot with a 256-token window.
   chatArgs:
     '-hf {{chatModel}} --host 0.0.0.0 --port 8000 --api-key {{apiKey}}' +
-    ' --ctx-size {{maxModelLen}} --n-gpu-layers 999 --parallel {{maxConcurrentSequences}}',
+    ' --ctx-size {{totalContext}} --n-gpu-layers 999 --parallel {{maxConcurrentSequences}}',
   embeddingArgs:
     '-hf {{embeddingModel}} --host 0.0.0.0 --port 8001 --api-key {{apiKey}}' +
     ' --embedding --n-gpu-layers 999',

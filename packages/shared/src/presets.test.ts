@@ -85,3 +85,12 @@ test('an AMD card is never a substitute, because the pod images are CUDA', () =>
   const ids = suitableGpus(PRICED, { format: 'awq', weightsGib: 18 }).map((g) => g.id)
   assert.ok(!ids.some((id) => id.startsWith('AMD')), 'MI300X has the memory but not the runtime')
 })
+
+test('each engine declares a concurrency that suits how it spends memory', () => {
+  // llama.cpp divides one context budget between slots, so every extra slot
+  // costs memory. vLLM's limit is independent of the per-request window.
+  assert.equal(LLAMACPP_PRESET.defaultConcurrency, 4)
+  assert.equal(VLLM_PRESET.defaultConcurrency, 64)
+  assert.match(LLAMACPP_PRESET.chatArgs, /--ctx-size \{\{totalContext\}\}/)
+  assert.match(VLLM_PRESET.chatArgs, /--max-model-len \{\{maxModelLen\}\}/)
+})
