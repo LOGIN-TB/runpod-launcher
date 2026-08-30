@@ -112,8 +112,22 @@ export class RunpodClient {
     return this.call('deletePod', { params: { id } })
   }
 
-  getPodLogs(id: string): Promise<unknown> {
-    return this.call('getPodLogs', { params: { id } })
+  /**
+   * Pod logs.
+   *
+   * Returned as text rather than parsed: the endpoint streams server-sent
+   * events and does not terminate on its own, so a deadline is imposed here.
+   * Without one the call hangs indefinitely — it did, for two minutes, before
+   * this was noticed.
+   */
+  async getPodLogs(id: string, timeoutMs = 15_000): Promise<string> {
+    const response = await this.fetchImpl(new URL(`/v2/pods/${encodeURIComponent(id)}/logs`, BASE_URL), {
+      headers: { Authorization: `Bearer ${this.apiKey}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    }).catch(() => null)
+
+    if (!response?.ok) return ''
+    return response.text().catch(() => '')
   }
 
   /**

@@ -4,6 +4,7 @@ import { api, type Connection, type GpuType, type ModelVerdict } from '../lib/ap
 import { useI18n } from '../lib/i18n.js'
 import { Badge, Button, Card, EmptyState, Field, Input } from '../components/primitives.js'
 import { ModelPicker } from '../components/ModelPicker.js'
+import { ScheduleEditor } from '../components/ScheduleEditor.js'
 
 const DEFAULT_IMAGE = 'vllm/vllm-openai:v0.28.0'
 
@@ -95,6 +96,17 @@ function TemplateEditor({
   const [useEmbedding, setUseEmbedding] = useState(false)
   const [sleepMode, setSleepMode] = useState<Template['lifecycleMode']>('stopResume')
   const [advanced, setAdvanced] = useState(false)
+  const [schedule, setSchedule] = useState<Template['schedule']>({
+    enabled: false,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    weekdays: [1, 2, 3, 4, 5],
+    startAt: '07:00',
+    stopAt: '19:00',
+    // A pod that nobody has called for half an hour is the single biggest
+    // saving available, so it is on by default.
+    idleStopMinutes: 30,
+    maxRuntimeHours: 12,
+  })
   const [maxLen, setMaxLen] = useState('16384')
   const [maxSeqs, setMaxSeqs] = useState('64')
   const [saving, setSaving] = useState(false)
@@ -143,6 +155,7 @@ function TemplateEditor({
         maxModelLen: Number(maxLen),
         maxConcurrentSequences: Number(maxSeqs),
         lifecycleMode: sleepMode,
+        schedule,
         networkVolumeId: null,
         args:
           '{{chatModel}} --port 8000 --host 0.0.0.0 --api-key {{apiKey}} --max-model-len {{maxModelLen}}' +
@@ -225,6 +238,9 @@ function TemplateEditor({
           </label>
         </div>
       </Field>
+
+      <h3>{t('schedule.title')}</h3>
+      <ScheduleEditor schedule={schedule} timezone={schedule.timezone} onChange={setSchedule} />
 
       <button type="button" className="disclosure" onClick={() => setAdvanced(!advanced)} aria-expanded={advanced}>
         {t('template.advanced')}

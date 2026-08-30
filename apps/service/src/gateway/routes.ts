@@ -65,7 +65,7 @@ export async function registerGatewayRoutes(app: FastifyInstance, deps: GatewayD
     // Report only what the active pod really serves. Advertising a model that
     // the running template does not load sends clients into a timeout instead
     // of a clear rejection.
-    const resolution = await deps.resolvePod({ wait: false })
+    const resolution = await deps.resolvePod({ wait: false }).catch(() => ({ state: 'none' }) as const)
     const servedModels = resolution.state === 'ready' ? resolution.pod.servedModels : []
     const created = Math.floor(Date.now() / 1000)
     return reply.send({
@@ -96,7 +96,18 @@ export async function registerGatewayRoutes(app: FastifyInstance, deps: GatewayD
     const body = request.body as Record<string, unknown> | undefined
     const requestedModel = typeof body?.model === 'string' ? body.model : null
 
-    const resolution = await deps.resolvePod({ wait: true })
+    let resolution: PodResolution
+    try {
+      resolution = await deps.resolvePod({ wait: true })
+    } catch (error) {
+      // Anything thrown while resolving — a missing RunPod key, a RunPod
+      // outage — must still leave the client with an OpenAI-shaped body. A
+      // Fastify default error reads as "Unknown error" in every SDK, which is
+      // how a clear "no API key configured" became an unexplained 500.
+      await reply.code(503).send(errors.upstream((error as Error).message))
+      return
+    }
+
     if (resolution.state === 'none') {
       await reply.code(503).send(errors.noPod())
       return

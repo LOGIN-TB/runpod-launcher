@@ -51,3 +51,29 @@ export type PublicSettings = Omit<Settings, SecretSettingKey> & {
  * never shown. `null` means "clear it".
  */
 export type SettingsPatch = { [K in keyof Settings]?: Settings[K] | undefined }
+
+/**
+ * Schema for a partial update, with **no defaults**.
+ *
+ * `settingsSchema.partial()` is not equivalent and must not be used here: zod
+ * still applies each field's default, so parsing `{ locale: 'de' }` yields
+ * `{ locale: 'de', runpodApiKey: null, huggingfaceToken: null, … }`. Since
+ * `null` means "clear this", changing the language silently deleted the RunPod
+ * key and the HuggingFace token. It presented as the app forgetting
+ * credentials for no reason.
+ *
+ * Every field here is optional and default-free, so an absent key stays absent.
+ */
+export const settingsPatchSchema = z
+  .object({
+    runpodApiKey: z.string().min(1).nullable(),
+    huggingfaceToken: z.string().min(1).nullable(),
+    notifyWebhookUrl: z.string().url().nullable(),
+    corsOrigins: z.array(z.string()),
+    wakeWaitSeconds: z.number().int().min(0).max(900),
+    dailyLimitUsd: z.number().min(0).nullable(),
+    monthlyLimitUsd: z.number().min(0).nullable(),
+    timezone: z.string(),
+    locale: z.enum(['de', 'en']),
+  })
+  .partial()

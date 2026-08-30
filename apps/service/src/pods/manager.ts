@@ -24,15 +24,34 @@ export interface PodRecord {
  * cheaper at rest, and free to land on whatever GPU is actually available.
  */
 export class PodManager {
-  /** Token the pod's own vLLM servers require. Regenerated per pod. */
-  private podApiKey: string | null = null
   private startInFlight: Promise<PodRecord> | null = null
 
   constructor(
     private readonly db: Db,
     private readonly runpod: () => RunpodClient,
     private readonly huggingfaceToken: () => string | null,
+    /**
+     * Encrypts the pod's own bearer token for storage. Left undefined the token
+     * is kept in clear, which is only acceptable in tests.
+     */
+    private readonly seal: { encrypt: (value: string) => string; decrypt: (value: string) => string } = {
+      encrypt: (value) => value,
+      decrypt: (value) => value,
+    },
   ) {}
+
+  /** The token the running pod's engine expects, read back from storage. */
+  private podApiKeyFor(podId: string): string | null {
+    const row = this.db.prepare('SELECT api_key AS apiKey FROM pods WHERE id = ?').get(podId) as
+      | { apiKey: string | null }
+      | undefined
+    if (!row?.apiKey) return null
+    try {
+      return this.seal.decrypt(row.apiKey)
+    } catch {
+      return null
+    }
+  }
 
   current(): PodRecord | null {
     const row = this.db
@@ -42,6 +61,42 @@ export class PodManager {
       )
       .get() as PodRecord | undefined
     return row ?? null
+  }
+
+  /**
+   * The template a request should wake.
+   *
+   * The pod that was running last, if there is a record of one — otherwise the
+   * template with a schedule enabled. Without that fallback, wake-on-request
+   * stops working the moment the scheduler stops the pod, which is precisely
+   * when it is needed.
+   */
+  wakeTarget(): Template | null {
+    const current = this.current()
+    if (current) return this.template(current.templateId)
+
+    const lastRun = this.db
+      .prepare('SELECT template_id AS templateId FROM pods ORDER BY created_at DESC LIMIT 1')
+      .get() as { templateId: string | null } | undefined
+    if (lastRun?.templateId) {
+      const template = this.template(lastRun.templateId)
+      if (template) return template
+    }
+
+    const templates = (
+      this.db.prepare('SELECT config FROM templates ORDER BY created_at').all() as Array<{ config: string }>
+    )
+      .map((row) => templateSchema.safeParse(JSON.parse(row.config)))
+      .flatMap((parsed) => (parsed.success ? [parsed.data] : []))
+
+    const scheduled = templates.find((template) => template.schedule.enabled)
+    if (scheduled) return scheduled
+
+    // With exactly one template there is no ambiguity about what was meant, so
+    // a request wakes it even with no schedule set. More than one and no
+    // history is genuinely ambiguous — guessing there would start the wrong
+    // GPU and bill for it.
+    return templates.length === 1 ? (templates[0] ?? null) : null
   }
 
   template(id: string): Template | null {
@@ -70,9 +125,9 @@ export class PodManager {
       if (resumed) return resumed
     }
 
-    this.podApiKey = generateToken()
-    const pod = await this.createWithFallback(client, template, this.podApiKey)
-    return this.record(pod, template.id)
+    const podApiKey = generateToken()
+    const pod = await this.createWithFallback(client, template, podApiKey)
+    return this.record(pod, template.id, podApiKey)
   }
 
   /**
@@ -157,6 +212,13 @@ export class PodManager {
         this.markStopped(podId)
         return null
       }
+      // Already running. RunPod rejects a redundant start with 409, which is
+      // agreement, not failure — it happens whenever our record has drifted
+      // behind reality, such as after the service restarts.
+      if (error instanceof RunpodError && error.status === 409) {
+        const current = await client.getPod(podId).catch(() => null)
+        return current ? this.record(current, templateId) : null
+      }
       throw error
     }
 
@@ -167,12 +229,70 @@ export class PodManager {
     return null
   }
 
-  async stop(mode: Template['lifecycleMode']): Promise<void> {
+  async stop(mode: Template['lifecycleMode'], reason = 'manual'): Promise<void> {
     const existing = this.current()
     if (!existing) return
     const client = this.runpod()
     await client.podAction(existing.id, mode === 'stopResume' ? 'stop' : 'terminate')
-    this.markStopped(existing.id)
+    this.markStopped(existing.id, reason)
+  }
+
+  /**
+   * Waits until the pod actually answers requests, not merely until RunPod
+   * calls it RUNNING.
+   *
+   * Those are minutes apart. RunPod reports RUNNING as soon as the container is
+   * scheduled; the engine still has to fetch weights, build the KV cache and
+   * compile kernels — 140 seconds of that measured on 2026-08-30, on top of the
+   * download. A gateway that trusts RUNNING forwards the first request into a
+   * port nothing is listening on and hands the client a bare 404.
+   */
+  async waitUntilServing(podId: string, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs
+    const pod = await this.waitUntilRunning(podId, timeoutMs)
+    if (!pod) return false
+
+    const active = this.describe()
+    const base = active?.chatUrl ?? active?.embeddingUrl
+    if (!base) return false
+
+    let crashChecks = 0
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(`${base}/health`, { signal: AbortSignal.timeout(5_000) })
+        if (response.ok) return true
+      } catch {
+        // Not up yet. The proxy answers 404 or 502 until the engine binds.
+      }
+
+      // A misconfigured engine never binds, and waiting the full budget for it
+      // teaches the user nothing. Seen live: `--task embed`, removed in vLLM
+      // 0.28, made the container restart in a loop while a client request was
+      // held for seven minutes and then told to "retry shortly".
+      crashChecks += 1
+      if (crashChecks % 4 === 0 && (await this.engineIsCrashLooping(podId))) {
+        throw new Error(
+          'The inference engine keeps exiting on startup. Check the pod log — usually a wrong argument or a model the engine cannot load.',
+        )
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS))
+    }
+    return false
+  }
+
+  /**
+   * Looks for the engine restarting repeatedly, which means it will never come
+   * up on its own no matter how long the caller waits.
+   */
+  private async engineIsCrashLooping(podId: string): Promise<boolean> {
+    const logs = await this.runpod()
+      .getPodLogs(podId)
+      .catch(() => '')
+
+    const restarts = logs.match(/start container for /g)?.length ?? 0
+    const fatal = /error: unrecognized arguments|Traceback \(most recent call last\)|ValueError:/.test(logs)
+    return restarts >= 3 && fatal
   }
 
   /** Polls RunPod until the pod reports RUNNING, or the deadline passes. */
@@ -194,7 +314,7 @@ export class PodManager {
   /** Describes the running pod to the gateway, or null when nothing serves. */
   describe(): ActivePod | null {
     const record = this.current()
-    if (!record || record.status !== 'RUNNING' || !this.podApiKey) return null
+    if (!record || record.status !== 'RUNNING') return null
     const template = this.template(record.templateId)
     if (!template) return null
 
@@ -207,27 +327,42 @@ export class PodManager {
       .filter((slot) => slot !== null)
       .map((slot) => slot.servedName ?? slot.repoId)
 
-    return { ...urls, podApiKey: this.podApiKey, servedModels }
+    const podApiKey = this.podApiKeyFor(record.id)
+    if (!podApiKey) return null
+
+    return { ...urls, podApiKey, servedModels }
   }
 
-  private record(pod: runpod.Pod, templateId: string): PodRecord {
+  private record(pod: runpod.Pod, templateId: string, podApiKey?: string): PodRecord {
     const now = new Date().toISOString()
     this.db
       .prepare(
-        `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, started_at, last_seen_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, started_at, last_seen_at, api_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET status = excluded.status,
                                        cost_per_hour = excluded.cost_per_hour,
                                        stopped_at = NULL,
-                                       last_seen_at = excluded.last_seen_at`,
+                                       stop_reason = NULL,
+                                       last_seen_at = excluded.last_seen_at,
+                                       -- A resume keeps the key it was created with.
+                                       api_key = COALESCE(excluded.api_key, pods.api_key)`,
       )
-      .run(pod.id, templateId, pod.status, pod.cost, now, pod.startedAt ?? now, now)
+      .run(
+        pod.id,
+        templateId,
+        pod.status,
+        pod.cost,
+        now,
+        pod.startedAt ?? now,
+        now,
+        podApiKey === undefined ? null : this.seal.encrypt(podApiKey),
+      )
     return { id: pod.id, templateId, status: pod.status, costPerHour: pod.cost }
   }
 
-  private markStopped(podId: string): void {
+  private markStopped(podId: string, reason = 'replaced'): void {
     this.db
-      .prepare("UPDATE pods SET stopped_at = ?, status = 'EXITED' WHERE id = ?")
-      .run(new Date().toISOString(), podId)
+      .prepare("UPDATE pods SET stopped_at = ?, status = 'EXITED', stop_reason = ? WHERE id = ?")
+      .run(new Date().toISOString(), reason, podId)
   }
 }

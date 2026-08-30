@@ -1,7 +1,7 @@
 import Fastify from 'fastify'
 import { loadConfig } from './config.js'
 import { openDatabase } from './store/db.js'
-import { generatePairingCode, loadOrCreateMasterKey } from './store/crypto.js'
+import { decryptSecret, encryptSecret, generatePairingCode, loadOrCreateMasterKey } from './store/crypto.js'
 import { SettingsStore } from './store/settings.js'
 import { TokenStore } from './auth/tokens.js'
 import { RunpodClient } from './runpod/client.js'
@@ -10,6 +10,9 @@ import { registerGatewayRoutes } from './gateway/routes.js'
 import { registerAdminRoutes } from './admin/routes.js'
 import { PairingService } from './auth/pairing.js'
 import { HuggingFaceClient } from './models/huggingface.js'
+import { SpendTracker } from './scheduler/spend.js'
+import { Notifier } from './scheduler/notify.js'
+import { Scheduler } from './scheduler/scheduler.js'
 
 const config = loadConfig()
 const app = Fastify({
@@ -32,9 +35,15 @@ const requireRunpodKey = (): RunpodClient => {
   return new RunpodClient(key)
 }
 
-const pods = new PodManager(db, requireRunpodKey, () => settings.secret('huggingfaceToken'))
+const pods = new PodManager(db, requireRunpodKey, () => settings.secret('huggingfaceToken'), {
+  encrypt: (value) => encryptSecret(masterKey, value),
+  decrypt: (value) => decryptSecret(masterKey, value),
+})
 const pairing = new PairingService(db, tokens, config.pairingCode ?? generatePairingCode())
 const huggingface = new HuggingFaceClient(() => settings.secret('huggingfaceToken'))
+const spend = new SpendTracker(db, requireRunpodKey, () => settings.read().timezone)
+const notifier = new Notifier(settings, app.log)
+const scheduler = new Scheduler(db, settings, pods, spend, notifier, app.log)
 
 /**
  * Lets the UI's dev server talk to the service.
@@ -64,17 +73,21 @@ await registerGatewayRoutes(app, {
     const active = pods.describe()
     if (active) return { state: 'ready', pod: active }
 
-    const record = pods.current()
-    const template = record ? pods.template(record.templateId) : null
-    // Nothing has ever been started for this template, so there is nothing to
-    // wake. Saying "still starting" here would send the caller waiting for a
-    // boot that was never begun.
-    if (!record || !template) return { state: 'none' }
-    if (!wait) return { state: 'starting' }
+    // Falls back to the scheduled template, so a request arriving after the
+    // night shutdown can still wake the pod — which is the whole point of
+    // wake-on-request.
+    const template = pods.wakeTarget()
+    if (!template) return { state: 'none' }
 
-    await pods.start(template)
-    const ready = await pods.waitUntilRunning(record.id, settings.read().wakeWaitSeconds * 1000)
-    const served = ready ? pods.describe() : null
+    const waitSeconds = settings.read().wakeWaitSeconds
+    if (!wait || waitSeconds === 0) return { state: 'starting' }
+
+    const record = await pods.start(template)
+    // Waits for the engine to answer, not just for RunPod to schedule the
+    // container — those are minutes apart, and the gap is exactly where a
+    // client would get a bare 404 from a port nothing is listening on.
+    const serving = await pods.waitUntilServing(record.id, waitSeconds * 1000)
+    const served = serving ? pods.describe() : null
     return served ? { state: 'ready', pod: served } : { state: 'starting' }
   },
   authenticateClient: async (token) => tokens.verify('client_tokens', token),
@@ -86,10 +99,16 @@ await registerGatewayRoutes(app, {
   wakeWaitSeconds: () => settings.read().wakeWaitSeconds,
 })
 
-await registerAdminRoutes(app, { db, settings, tokens, pods, pairing, requireRunpodKey, huggingface })
+await registerAdminRoutes(app, { db, settings, tokens, pods, pairing, requireRunpodKey, huggingface, spend, scheduler })
 
 const address = await app.listen({ port: config.port, host: config.host })
 app.log.info({ address, tlsMode: config.tlsMode }, 'launcher service listening')
+
+// Always running. Each tick checks for credentials itself, because they are
+// entered after the service is up — gating the start on them meant a schedule
+// created on day one would not run until the container was restarted.
+scheduler.start()
+app.log.info({}, 'scheduler running')
 
 if (!pairing.hasPairedDevice()) {
   // Printed plainly rather than through the structured logger: this is the one
@@ -106,6 +125,7 @@ if (!pairing.hasPairedDevice()) {
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
     app.log.info({ signal }, 'shutting down')
+    scheduler.stop()
     void app.close().then(() => {
       db.close()
       process.exit(0)

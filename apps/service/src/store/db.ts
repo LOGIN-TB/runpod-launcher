@@ -81,6 +81,15 @@ const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX idx_usage_at ON usage(at);
   `,
+  // Why a pod was stopped. Needed so an idle shutdown is not immediately undone
+  // by the schedule seeing an open window and starting the pod again.
+  `ALTER TABLE pods ADD COLUMN stop_reason TEXT;`,
+  // The bearer token the pod's own engine expects, encrypted.
+  //
+  // It used to live only in memory, so restarting the service left the launcher
+  // unable to talk to a pod that was still running and still being billed —
+  // invisible to the gateway until somebody noticed the charge.
+  `ALTER TABLE pods ADD COLUMN api_key TEXT;`,
 ]
 
 export function openDatabase(path: string): Db {

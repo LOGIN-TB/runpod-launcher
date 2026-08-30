@@ -201,3 +201,22 @@
   .brand { display: none; }
   .content { padding: var(--space-4); }
 }
+
+/* --- schedule and spending --- */
+.weekdays { display: flex; gap: var(--space-1); flex-wrap: wrap; }
+.weekday {
+  font: inherit; font-size: var(--text-sm);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-raised); color: var(--text-muted);
+  cursor: pointer; min-width: 3rem;
+}
+.weekday.on { background: var(--accent-subtle); border-color: var(--accent); color: var(--accent); font-weight: 500; }
+
+.spend-grid { display: flex; gap: var(--space-6); flex-wrap: wrap; }
+.amount { display: flex; flex-direction: column; }
+.amount-label { font-size: var(--text-xs); color: var(--text-muted); }
+.amount-value { font-size: var(--text-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.amount-limit { font-size: var(--text-xs); color: var(--text-faint); }
+.amount.over .amount-value { color: var(--danger); }

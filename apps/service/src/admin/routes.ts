@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { settingsSchema, templateSchema, type Template } from '@runpod-launcher/shared'
+import { settingsPatchSchema, templateSchema, type Template } from '@runpod-launcher/shared'
 import { generatePairingCode } from '../store/crypto.js'
 import type { Db } from '../store/db.js'
 import type { SettingsStore } from '../store/settings.js'
@@ -9,6 +9,8 @@ import type { PodManager } from '../pods/manager.js'
 import type { PairingService } from '../auth/pairing.js'
 import type { RunpodClient } from '../runpod/client.js'
 import type { HuggingFaceClient } from '../models/huggingface.js'
+import type { SpendTracker } from '../scheduler/spend.js'
+import type { Scheduler } from '../scheduler/scheduler.js'
 
 export interface AdminDeps {
   db: Db
@@ -18,6 +20,8 @@ export interface AdminDeps {
   pairing: PairingService
   requireRunpodKey: () => RunpodClient
   huggingface: HuggingFaceClient
+  spend: SpendTracker
+  scheduler: Scheduler
 }
 
 const BEARER = /^Bearer\s+(.+)$/i
@@ -84,7 +88,7 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps)
     const device = await requireDevice(request, reply)
     if (!device) return
 
-    const parsed = settingsSchema.partial().safeParse(request.body)
+    const parsed = settingsPatchSchema.safeParse(request.body)
     if (!parsed.success) {
       return reply.code(400).send({ error: 'Invalid settings', issues: parsed.error.issues })
     }
@@ -177,6 +181,38 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps)
           ...(body.otherSlotBytes ? { otherSlotBytes: body.otherSlotBytes } : {}),
         }),
       )
+    } catch (error) {
+      return reply.code(502).send({ error: (error as Error).message })
+    }
+  })
+
+  /** What has been spent, and how much of it is still an estimate. */
+  app.get('/spend', async (request, reply) => {
+    if (!(await requireDevice(request, reply))) return
+    const settings = deps.settings.read()
+    try {
+      const snapshot = await deps.spend.snapshot()
+      return reply.send({
+        ...snapshot,
+        dailyLimitUsd: settings.dailyLimitUsd,
+        monthlyLimitUsd: settings.monthlyLimitUsd,
+      })
+    } catch (error) {
+      return reply.code(502).send({ error: (error as Error).message })
+    }
+  })
+
+  /**
+   * What the scheduler would do right now, and why.
+   *
+   * A schedule that silently does nothing is impossible to debug from the
+   * outside — this makes the decision visible without waiting for 07:00.
+   */
+  app.get('/schedule/preview', async (request, reply) => {
+    if (!(await requireDevice(request, reply))) return
+    try {
+      const action = await deps.scheduler.preview(new Date())
+      return reply.send({ action })
     } catch (error) {
       return reply.code(502).send({ error: (error as Error).message })
     }

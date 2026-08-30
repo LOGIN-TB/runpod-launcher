@@ -5,6 +5,7 @@ import { useI18n } from '../lib/i18n.js'
 import { Badge, Button, Card, EmptyState } from '../components/primitives.js'
 import { CopyField } from '../components/CopyField.js'
 import { setTrayStatus } from '../lib/storage.js'
+import { SpendPanel } from '../components/SpendPanel.js'
 
 const POLL_MS = 5_000
 
@@ -142,6 +143,8 @@ export function Overview({
           </p>
         ) : null}
       </Card>
+
+      <SpendPanel connection={connection} />
 
       {view?.serving?.chatUrl || view?.serving?.embeddingUrl ? (
         <Card>

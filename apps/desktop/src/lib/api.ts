@@ -79,6 +79,20 @@ export interface ModelVerdict {
   headroomGib: number | null
 }
 
+export interface SpendSnapshot {
+  todayUsd: number
+  monthUsd: number
+  /** The part that is the launcher's arithmetic, not RunPod's bill. */
+  estimatedUsd: number
+  dailyLimitUsd: number | null
+  monthlyLimitUsd: number | null
+}
+
+export interface ScheduleAction {
+  do: 'start' | 'stop' | 'nothing'
+  because: string
+}
+
 export interface ClientToken {
   id: string
   name: string
@@ -118,6 +132,9 @@ export const api = {
   stopPod: (c: Connection) => request<{ stopped: string | null }>(c, '/pod/stop', { method: 'POST', body: '{}' }),
 
   gpus: (c: Connection) => request<{ gpus: GpuType[] }>(c, '/catalog/gpus'),
+
+  spend: (c: Connection) => request<SpendSnapshot>(c, '/spend'),
+  schedulePreview: (c: Connection) => request<{ action: ScheduleAction | null }>(c, '/schedule/preview'),
 
   searchModels: (c: Connection, q: string, kind: 'chat' | 'embedding') =>
     request<{ models: ModelHit[] }>(c, `/models/search?q=${encodeURIComponent(q)}&kind=${kind}`),

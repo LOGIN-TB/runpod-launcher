@@ -68,3 +68,25 @@ test('every problem code the service can emit has a message in both locales', ()
     assert.ok(de[key], `German is missing problem.${code}`)
   }
 })
+
+test('every reason the scheduler can give has a message in both locales', () => {
+  // Same contract as the problem codes: the service reports a code and the app
+  // phrases it, so an unmapped reason would surface as raw kebab-case.
+  const reasons = [
+    'inside-schedule',
+    'outside-schedule',
+    'idle-timeout',
+    'max-runtime',
+    'daily-limit',
+    'monthly-limit',
+    'schedule-disabled',
+    'already-correct',
+    'starting',
+    'idle-until-requested',
+  ]
+  for (const reason of reasons) {
+    const key = `schedule.reason.${reason}` as keyof typeof en
+    assert.ok(en[key], `English is missing schedule.reason.${reason}`)
+    assert.ok(de[key], `German is missing schedule.reason.${reason}`)
+  }
+})
