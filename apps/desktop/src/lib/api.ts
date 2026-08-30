@@ -173,6 +173,11 @@ export const api = {
   deletePod: (c: Connection, id: string) => request<void>(c, `/pods/${id}`, { method: 'DELETE' }),
   selectPod: (c: Connection, id: string) => request<unknown>(c, `/pods/${id}/select`, { method: 'POST', body: '{}' }),
   selfTest: (c: Connection) => request<SelfTestResult>(c, '/pod/selftest', { method: 'POST', body: '{}' }),
+  updateTemplate: (c: Connection, id: string, template: Record<string, unknown>) =>
+    request<Template & { appliesToNextPod: boolean }>(c, `/templates/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(template),
+    }),
   deleteTemplate: (c: Connection, id: string) => request<void>(c, `/templates/${id}`, { method: 'DELETE' }),
 
   gpus: (c: Connection) => request<{ gpus: GpuType[] }>(c, '/catalog/gpus'),

@@ -408,6 +408,37 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps)
     }
   })
 
+  /**
+   * Replaces a template.
+   *
+   * Editing was missing entirely, which left the launcher telling people to
+   * "add fallback GPUs to the template" with no way to do it.
+   */
+  app.put('/templates/:id', async (request, reply) => {
+    const device = await requireDevice(request, reply)
+    if (!device) return
+    const { id } = request.params as { id: string }
+
+    const existing = db.prepare('SELECT id FROM templates WHERE id = ?').get(id)
+    if (!existing) return reply.code(404).send({ error: 'Unknown template' })
+
+    const parsed = templateSchema.safeParse({ ...(request.body as object), id })
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'Invalid template', issues: parsed.error.issues })
+    }
+
+    db.prepare('UPDATE templates SET name = ?, config = ?, updated_at = ? WHERE id = ?').run(
+      parsed.data.name,
+      JSON.stringify(parsed.data),
+      new Date().toISOString(),
+      id,
+    )
+    audit(device.id, 'template.updated', { id, name: parsed.data.name }, request.ip)
+    // A running pod keeps the settings it was built with; the change applies to
+    // the next pod. Saying so beats letting somebody wonder why nothing moved.
+    return reply.send({ ...parsed.data, appliesToNextPod: pods.current()?.templateId === id })
+  })
+
   app.delete('/templates/:id', async (request, reply) => {
     const device = await requireDevice(request, reply)
     if (!device) return

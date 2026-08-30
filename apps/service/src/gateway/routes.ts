@@ -32,6 +32,16 @@ export interface GatewayDeps {
    * pod slept has to be the thing that wakes it.
    */
   resolvePod(options: { wait: boolean }): Promise<PodResolution>
+  /**
+   * Models to advertise, whether or not a pod is up.
+   *
+   * A client lists models before it can pick one. Advertising nothing while the
+   * pod sleeps means it can never send the request that would wake it — the
+   * agent simply reports "0 models" and stops. What a sleeping template would
+   * serve is the honest answer, and asking for it is what starts the pod.
+   */
+  advertisedModels(): Promise<readonly string[]>
+
   authenticateClient(token: string): Promise<{ id: string; name: string } | null>
   recordUsage(entry: {
     tokenId: string
@@ -62,11 +72,13 @@ export async function registerGatewayRoutes(app: FastifyInstance, deps: GatewayD
   app.get('/v1/models', async (request, reply) => {
     if (!(await authenticate(request, reply))) return
 
-    // Report only what the active pod really serves. Advertising a model that
-    // the running template does not load sends clients into a timeout instead
-    // of a clear rejection.
     const resolution = await deps.resolvePod({ wait: false }).catch(() => ({ state: 'none' }) as const)
-    const servedModels = resolution.state === 'ready' ? resolution.pod.servedModels : []
+    const servedModels =
+      resolution.state === 'ready'
+        ? resolution.pod.servedModels
+        : // Nothing running: advertise what would be served, so a client can
+          // choose it and let the request bring the pod up.
+          await deps.advertisedModels().catch(() => [])
     const created = Math.floor(Date.now() / 1000)
     return reply.send({
       object: 'list',

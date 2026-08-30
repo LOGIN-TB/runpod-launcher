@@ -18,7 +18,8 @@ export function Templates({
   onChanged: () => void
 }): ReactNode {
   const { t } = useI18n()
-  const [editing, setEditing] = useState(false)
+  // null = not editing; a template = editing that one; 'new' = creating.
+  const [editing, setEditing] = useState<Template | 'new' | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<Template | null>(null)
@@ -40,11 +41,12 @@ export function Templates({
     return (
       <TemplateEditor
         connection={connection}
+        existing={editing === 'new' ? null : editing}
         onDone={() => {
-          setEditing(false)
+          setEditing(null)
           onChanged()
         }}
-        onCancel={() => setEditing(false)}
+        onCancel={() => setEditing(null)}
       />
     )
   }
@@ -53,7 +55,7 @@ export function Templates({
     <div className="stack">
       <div className="row space-between">
         <h2>{t('template.title')}</h2>
-        <Button variant="primary" onClick={() => setEditing(true)}>
+        <Button variant="primary" onClick={() => setEditing('new')}>
           {t('template.new')}
         </Button>
       </div>
@@ -115,6 +117,9 @@ export function Templates({
                 >
                   {t('template.createPod')}
                 </Button>
+                <Button variant="secondary" onClick={() => setEditing(template)}>
+                  {t('action.edit')}
+                </Button>
                 <Button
                   variant="danger"
                   loading={busy === template.id}
@@ -146,23 +151,38 @@ interface Slot {
  */
 function TemplateEditor({
   connection,
+  existing,
   onDone,
   onCancel,
 }: {
   connection: Connection
+  /** The template being edited, or null when creating one. */
+  existing: Template | null
   onDone: () => void
   onCancel: () => void
 }): ReactNode {
   const { t, money } = useI18n()
   const [gpus, setGpus] = useState<GpuType[]>([])
-  const [name, setName] = useState('')
-  const [gpuId, setGpuId] = useState('')
-  const [chat, setChat] = useState<Slot>({ repoId: '', verdict: null, quantisation: null })
-  const [embedding, setEmbedding] = useState<Slot>({ repoId: '', verdict: null, quantisation: null })
-  const [useEmbedding, setUseEmbedding] = useState(false)
-  const [sleepMode, setSleepMode] = useState<Template['lifecycleMode']>('stopResume')
+  const [name, setName] = useState(existing?.name ?? '')
+  const [gpuId, setGpuId] = useState(existing?.gpuTypeId ?? '')
+  // Chosen by hand when editing; computed automatically for a new template.
+  const [fallbackOverride, setFallbackOverride] = useState<string[] | null>(
+    existing ? existing.gpuFallbackIds : null,
+  )
+  const [chat, setChat] = useState<Slot>({
+    repoId: existing?.chatModel?.repoId ?? '',
+    verdict: null,
+    quantisation: existing?.chatModel?.quantisation ?? null,
+  })
+  const [embedding, setEmbedding] = useState<Slot>({
+    repoId: existing?.embeddingModel?.repoId ?? '',
+    verdict: null,
+    quantisation: existing?.embeddingModel?.quantisation ?? null,
+  })
+  const [useEmbedding, setUseEmbedding] = useState(existing?.embeddingModel != null)
+  const [sleepMode, setSleepMode] = useState<Template['lifecycleMode']>(existing?.lifecycleMode ?? 'stopResume')
   const [advanced, setAdvanced] = useState(false)
-  const [schedule, setSchedule] = useState<Template['schedule']>({
+  const [schedule, setSchedule] = useState<Template['schedule']>(existing?.schedule ?? {
     enabled: false,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     weekdays: [1, 2, 3, 4, 5],
@@ -173,8 +193,8 @@ function TemplateEditor({
     idleStopMinutes: 30,
     maxRuntimeHours: 12,
   })
-  const [maxLen, setMaxLen] = useState('16384')
-  const [maxSeqs, setMaxSeqs] = useState('64')
+  const [maxLen, setMaxLen] = useState(String(existing?.maxModelLen ?? 16384))
+  const [maxSeqs, setMaxSeqs] = useState(String(existing?.maxConcurrentSequences ?? 64))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -224,9 +244,13 @@ function TemplateEditor({
         },
       )
         .sort((a, b) => (a.price.secure ?? 99) - (b.price.secure ?? 99))
-        .slice(0, 3)
         .map((candidate) => candidate.id)
     : []
+
+  // Suggested automatically, but the user has the final say — the launcher
+  // tells people to add fallbacks when capacity runs out, so they must be able
+  // to.
+  const chosenFallbacks = fallbackOverride ?? fallbacks.slice(0, 3)
 
   const blocked =
     !name ||
@@ -239,7 +263,7 @@ function TemplateEditor({
     setSaving(true)
     setError(null)
     try {
-      await api.createTemplate(connection, {
+      const body = {
         name,
         engine: preset.engine,
         image: preset.image,
@@ -254,14 +278,17 @@ function TemplateEditor({
               }
             : null,
         gpuTypeId: gpu!.id,
-        gpuFallbackIds: fallbacks,
+        gpuFallbackIds: chosenFallbacks,
         maxModelLen: Number(maxLen),
         maxConcurrentSequences: Number(maxSeqs),
         lifecycleMode: sleepMode,
         schedule,
         networkVolumeId: null,
         args: chat.repoId ? preset.chatArgs : preset.embeddingArgs,
-      })
+      }
+      await (existing
+        ? api.updateTemplate(connection, existing.id, body)
+        : api.createTemplate(connection, body))
       onDone()
     } catch (cause) {
       setError((cause as Error).message)
@@ -272,7 +299,7 @@ function TemplateEditor({
 
   return (
     <Card>
-      <h2>{t('template.new')}</h2>
+      <h2>{existing ? t('template.edit', { name: existing.name }) : t('template.new')}</h2>
 
       <Field label={t('template.name')}>
         <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="qwen-chat" />
@@ -289,6 +316,39 @@ function TemplateEditor({
           ))}
         </select>
       </Field>
+
+      {/* Which other cards may stand in when the chosen one has no capacity.
+          Only ones that are at least as large, run the same format and cost no
+          more are offered — a substitute must not quietly be worse. */}
+      {gpu && fallbacks.length > 0 ? (
+        <Field label={t('template.fallbacks')} hint={t('template.fallbacksHint')}>
+          <div className="stack">
+            {fallbacks.slice(0, 6).map((id) => {
+              const candidate = gpus.find((entry) => entry.id === id)
+              const on = chosenFallbacks.includes(id)
+              return (
+                <label key={id} className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={(event) =>
+                      setFallbackOverride(
+                        event.target.checked
+                          ? [...chosenFallbacks, id]
+                          : chosenFallbacks.filter((entry) => entry !== id),
+                      )
+                    }
+                  />
+                  <span className="muted small">
+                    {candidate?.name} · {candidate?.memory} GiB · {money(candidate?.price.secure ?? 0)}/h ·{' '}
+                    {candidate?.availability ?? '?'}
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+        </Field>
+      ) : null}
 
       <ModelPicker
         connection={connection}

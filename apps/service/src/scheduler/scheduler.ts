@@ -61,7 +61,7 @@ export class Scheduler {
     const snapshot = await this.spend.snapshot(now)
     return decide({
       template,
-      pod: this.podState(),
+      pod: await this.podStateAsync(),
       spend: {
         todayUsd: snapshot.todayUsd,
         monthUsd: snapshot.monthUsd,
@@ -109,7 +109,7 @@ export class Scheduler {
 
     const action = decide({
       template,
-      pod: this.podState(),
+      pod: await this.podStateAsync(),
       spend: {
         todayUsd: snapshot.todayUsd,
         monthUsd: snapshot.monthUsd,
@@ -185,6 +185,14 @@ export class Scheduler {
     return scheduled[0] ?? null
   }
 
+  private async podStateAsync(): Promise<PodState> {
+    const base = this.podState()
+    if (base.status !== 'RUNNING') return base
+    // Asking the engine directly, because RunPod's RUNNING arrives minutes
+    // before it can answer anything.
+    return { ...base, engineReady: this.pods.describe() !== null && (await this.pods.engineAnswers()) }
+  }
+
   private podState(): PodState {
     const record = this.pods.current()
     const row = this.db
@@ -206,6 +214,7 @@ export class Scheduler {
       startedAt: row?.startedAt ? new Date(row.startedAt) : null,
       lastRequestAt: lastRequest ? new Date(lastRequest.at) : null,
       idleStoppedAt: idleStop?.stoppedAt ? new Date(idleStop.stoppedAt) : null,
+      engineReady: false,
     }
   }
 

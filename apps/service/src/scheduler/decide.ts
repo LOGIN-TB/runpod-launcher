@@ -31,6 +31,13 @@ export interface PodState {
   /** When the gateway last saw a request. Null means none since it started. */
   lastRequestAt: Date | null
   /**
+   * Whether the engine is answering yet.
+   *
+   * A pod spends its first several minutes downloading and loading. Counting
+   * that as idle time bills for the download and then throws it away.
+   */
+  engineReady: boolean
+  /**
    * When the pod was last stopped for being idle, if it was.
    *
    * Without this the two rules fight: idle shutdown stops the pod, the schedule
@@ -82,10 +89,15 @@ export function decide(args: {
       if (hoursUp >= schedule.maxRuntimeHours) return { do: 'stop', because: 'max-runtime' }
     }
 
-    if (schedule.idleStopMinutes > 0) {
-      // With no request since it started, idleness is measured from the start —
-      // otherwise a pod nobody ever called would stay up forever.
-      const since = pod.lastRequestAt ?? pod.startedAt
+    // Nothing is idle until it can serve. Measured live: a pod was stopped for
+    // idleness 64 seconds after starting, with a 30-minute limit, because it
+    // was still downloading.
+    if (schedule.idleStopMinutes > 0 && pod.engineReady) {
+      // Idleness runs from this pod's own start, never from an older pod's
+      // last request. Using the most recent request overall made every new pod
+      // instantly stale: the previous one's traffic was already hours old, so
+      // the clock was expired before the model had finished downloading.
+      const since = laterOf(pod.startedAt, pod.lastRequestAt)
       if (since) {
         const idleMinutes = (now.getTime() - since.getTime()) / 60_000
         if (idleMinutes >= schedule.idleStopMinutes) return { do: 'stop', because: 'idle-timeout' }
@@ -181,6 +193,12 @@ export function windowOpenedAt(schedule: Template['schedule'], now: Date): Date 
     nowMinutes >= startMinutes ? nowMinutes - startMinutes : nowMinutes + (24 * 60 - startMinutes)
 
   return new Date(now.getTime() - minutesSinceOpen * 60_000)
+}
+
+const laterOf = (a: Date | null, b: Date | null): Date | null => {
+  if (!a) return b
+  if (!b) return a
+  return a > b ? a : b
 }
 
 const toMinutes = (hhmm: string): number => {

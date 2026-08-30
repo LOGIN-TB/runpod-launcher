@@ -419,6 +419,19 @@ export class PodManager {
     )
   }
 
+  /** Does the active pod's engine answer right now? */
+  async engineAnswers(): Promise<boolean> {
+    const active = this.describe()
+    const base = active?.chatUrl ?? active?.embeddingUrl
+    if (!base) return false
+    try {
+      const response = await fetch(`${base}/health`, { signal: AbortSignal.timeout(4_000) })
+      return response.ok
+    } catch {
+      return false
+    }
+  }
+
   /** Asks the pod's own engine whether it is serving yet. */
   private async readinessOf(pod: runpod.Pod): Promise<{ state: Readiness; detail: string | null }> {
     if (pod.status === 'PROVISIONING' || pod.status === 'STARTING') {

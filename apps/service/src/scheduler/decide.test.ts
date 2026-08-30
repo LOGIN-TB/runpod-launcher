@@ -28,6 +28,7 @@ const pod = (overrides: Partial<PodState> = {}): PodState => ({
   startedAt: new Date('2026-09-01T06:00:00Z'),
   lastRequestAt: new Date('2026-09-01T06:00:00Z'),
   idleStoppedAt: null,
+  engineReady: true,
   ...overrides,
 })
 
@@ -248,4 +249,63 @@ test('the window opening is located correctly, including across midnight', () =>
 
   // Outside any window there is no occurrence to point at.
   assert.equal(windowOpenedAt(template().schedule, at('2026-09-01T20:00:00Z')), null)
+})
+
+test('a pod is never idle before its engine can answer', () => {
+  // Measured live: a pod was stopped for idleness 64 seconds after starting,
+  // under a 30-minute limit, while it was still downloading the model. The
+  // download was paid for and then discarded.
+  const action = decide({
+    template: template({ idleStopMinutes: 30 }),
+    pod: pod({
+      startedAt: at('2026-09-01T06:00:00Z'),
+      // An older pod's traffic, hours ago. This alone used to expire the clock.
+      lastRequestAt: at('2026-09-01T01:00:00Z'),
+      engineReady: false,
+    }),
+    now: at('2026-09-01T06:01:00Z'),
+    spend: noLimits,
+  })
+  assert.notEqual(action.because, 'idle-timeout')
+})
+
+test('idleness runs from this pod’s start, not from an older pod’s last request', () => {
+  // The bug in one line: `lastRequestAt ?? startedAt` took the most recent
+  // request across all pods, so a brand-new pod inherited a clock that had
+  // already expired.
+  const justStarted = decide({
+    template: template({ idleStopMinutes: 30 }),
+    pod: pod({
+      startedAt: at('2026-09-01T06:00:00Z'),
+      lastRequestAt: at('2026-09-01T01:00:00Z'), // five hours ago, another pod
+      engineReady: true,
+    }),
+    now: at('2026-09-01T06:01:00Z'),
+    spend: noLimits,
+  })
+  assert.notEqual(justStarted.because, 'idle-timeout', 'one minute old is not idle')
+
+  const genuinelyIdle = decide({
+    template: template({ idleStopMinutes: 30 }),
+    pod: pod({
+      startedAt: at('2026-09-01T06:00:00Z'),
+      lastRequestAt: at('2026-09-01T06:05:00Z'),
+      engineReady: true,
+    }),
+    now: at('2026-09-01T06:40:00Z'),
+    spend: noLimits,
+  })
+  assert.equal(genuinelyIdle.because, 'idle-timeout', '35 minutes after the last request is')
+})
+
+test('a spend limit still stops a pod that is not ready yet', () => {
+  // Readiness protects the idle rule only. Money is money whether or not the
+  // model has finished loading.
+  const action = decide({
+    template: template(),
+    pod: pod({ engineReady: false, startedAt: at('2026-09-01T06:00:00Z') }),
+    spend: { todayUsd: 50, monthUsd: 50, dailyLimitUsd: 20, monthlyLimitUsd: null },
+    now: at('2026-09-01T06:01:00Z'),
+  })
+  assert.equal(action.because, 'daily-limit')
 })

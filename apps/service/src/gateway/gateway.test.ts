@@ -5,11 +5,12 @@ import { registerGatewayRoutes, type GatewayDeps } from './routes.js'
 
 const deps = (overrides: Partial<GatewayDeps> = {}): GatewayDeps => ({
   resolvePod: async () => ({ state: 'none' }),
+  advertisedModels: async () => [],
   authenticateClient: async (token) => (token === 'good' ? { id: 'c1', name: 'client' } : null),
   recordUsage: () => {},
   wakeWaitSeconds: () => 60,
   ...overrides,
-})
+}) as GatewayDeps
 
 const app = async (d: GatewayDeps) => {
   const server = Fastify()
@@ -77,4 +78,42 @@ test('a sleeping pod that is still booting answers 503 with Retry-After', async 
   assert.equal(response.statusCode, 503)
   assert.equal(response.headers['retry-after'], '30')
   assert.equal((body(response) as { error: { code: string } }).error.code, 'model_loading')
+})
+
+test('models are advertised while the pod sleeps, or no client can ever wake it', () => {
+  // A client lists models before it can pick one. With an empty list an agent
+  // reports "0 models" and stops — so the request that would have started the
+  // pod is never sent.
+  return (async () => {
+    const server = await app(
+      deps({
+        resolvePod: async () => ({ state: 'none' }),
+        advertisedModels: async () => ['Qwen/Qwen3.8-27B-FP8', 'Qwen/Qwen3-Embedding-0.6B'],
+      }),
+    )
+    const response = await server.inject({
+      method: 'GET',
+      url: '/v1/models',
+      headers: { authorization: 'Bearer good' },
+    })
+    const payload = body(response) as { data: Array<{ id: string }> }
+    assert.deepEqual(payload.data.map((model) => model.id), [
+      'Qwen/Qwen3.8-27B-FP8',
+      'Qwen/Qwen3-Embedding-0.6B',
+    ])
+  })()
+})
+
+test('a running pod still reports what it actually serves, not the template', async () => {
+  const server = await app(
+    deps({
+      resolvePod: async () => ({
+        state: 'ready',
+        pod: { chatUrl: 'http://x', embeddingUrl: null, podApiKey: 'k', servedModels: ['actually-loaded'] },
+      }),
+      advertisedModels: async () => ['something-else'],
+    }),
+  )
+  const response = await server.inject({ method: 'GET', url: '/v1/models', headers: { authorization: 'Bearer good' } })
+  assert.deepEqual((body(response) as { data: Array<{ id: string }> }).data.map((m) => m.id), ['actually-loaded'])
 })

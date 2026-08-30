@@ -78,6 +78,15 @@ await registerGatewayRoutes(app, {
     const served = serving ? pods.describe() : null
     return served ? { state: 'ready', pod: served } : { state: 'starting' }
   },
+  advertisedModels: async () => {
+    const active = pods.describe()
+    if (active) return active.servedModels
+    const template = pods.wakeTarget()
+    if (!template) return []
+    return [template.chatModel, template.embeddingModel]
+      .filter((slot) => slot !== null)
+      .map((slot) => slot.servedName ?? slot.repoId)
+  },
   authenticateClient: async (token) => tokens.verify('client_tokens', token),
   recordUsage: (entry) => {
     db.prepare(
