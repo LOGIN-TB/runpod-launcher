@@ -1,0 +1,51 @@
+# RunPod Launcher — the always-on half.
+#
+# This one file works two ways:
+#
+#   Plain Docker:  docker compose up -d
+#                  then read the pairing code from `docker compose logs`
+#
+#   Coolify:       New Resource -> Docker Compose -> point at this repository.
+#                  Coolify fills SERVICE_FQDN_LAUNCHER_8080 with a subdomain and
+#                  issues the certificate itself, and generates the pairing code
+#                  into SERVICE_PASSWORD_PAIRING where you can read it in the UI.
+#
+# Outside Coolify both of those variables are empty, and the service falls back
+# to generating its own certificate and its own pairing code. Same file, no fork.
+#
+# Nothing confidential belongs here. The RunPod key, the HuggingFace token and
+# any webhook URL are typed into the desktop app and stored encrypted.
+
+services:
+  launcher:
+    image: ghcr.io/OWNER/runpod-launcher:latest
+    # To run your own build instead of the published image, comment out `image`
+    # above and uncomment this:
+    # build: .
+    restart: unless-stopped
+    environment:
+      # Coolify substitutes these; plain Docker leaves them empty.
+      - SERVICE_FQDN_LAUNCHER_8080
+      - PAIRING_CODE=${SERVICE_PASSWORD_PAIRING:-}
+      # `self`  — the service makes its own certificate and the app pins it.
+      # `proxy` — something in front terminates TLS (set this under Coolify).
+      - TLS_MODE=${TLS_MODE:-self}
+      - PORT=8080
+      - TZ=${TZ:-UTC}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    ports:
+      - "${LAUNCHER_PORT:-8080}:8080"
+    volumes:
+      # `is_directory` tells Coolify to create a directory here first. Without
+      # it Docker creates a *file* at the path and the database cannot open.
+      - launcher-data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  launcher-data:
+    driver: local

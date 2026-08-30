@@ -1,0 +1,20 @@
+# Pod image: vLLM plus the launcher's entrypoint.
+#
+# We need our own image because RunPod's createPod only accepts `args`, not a
+# start command — with the stock vLLM entrypoint we could never run a second
+# process for the embedding model.
+#
+# The base tag is pinned deliberately. `latest` has broken support for freshly
+# released architectures before, and Qwen3.8's hybrid Gated DeltaNet layers are
+# exactly the kind of thing that needs a known-good version.
+#
+# v0.28.0 (2026-08-26) is the newest stable release at time of writing and the
+# first candidate to verify in the walking-skeleton run.
+ARG VLLM_VERSION=v0.28.0
+FROM vllm/vllm-openai:${VLLM_VERSION}
+
+COPY start-vllm.sh /usr/local/bin/launcher-start
+RUN chmod +x /usr/local/bin/launcher-start
+
+EXPOSE 8000 8001
+ENTRYPOINT ["/usr/local/bin/launcher-start"]

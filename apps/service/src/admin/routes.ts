@@ -1,0 +1,188 @@
+import { randomUUID } from 'node:crypto'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { settingsSchema, templateSchema, type Template } from '@runpod-launcher/shared'
+import { generatePairingCode } from '../store/crypto.js'
+import type { Db } from '../store/db.js'
+import type { SettingsStore } from '../store/settings.js'
+import type { TokenStore } from '../auth/tokens.js'
+import type { PodManager } from '../pods/manager.js'
+import type { PairingService } from '../auth/pairing.js'
+import type { RunpodClient } from '../runpod/client.js'
+
+export interface AdminDeps {
+  db: Db
+  settings: SettingsStore
+  tokens: TokenStore
+  pods: PodManager
+  pairing: PairingService
+  requireRunpodKey: () => RunpodClient
+}
+
+const BEARER = /^Bearer\s+(.+)$/i
+
+/**
+ * The control surface the desktop app talks to.
+ *
+ * Everything here needs a device token. Client tokens — the ones handed to n8n
+ * or an agent — are deliberately rejected: consuming the model must never imply
+ * permission to rent hardware.
+ */
+export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps): Promise<void> {
+  const { db, settings, tokens, pods, pairing } = deps
+
+  const audit = (actor: string, action: string, detail: unknown, ip: string | undefined): void => {
+    db.prepare('INSERT INTO audit_log (at, actor, action, detail, ip) VALUES (?, ?, ?, ?, ?)').run(
+      new Date().toISOString(),
+      actor,
+      action,
+      detail === undefined ? null : JSON.stringify(detail),
+      ip ?? null,
+    )
+  }
+
+  async function requireDevice(
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<{ id: string; name: string } | null> {
+    const match = BEARER.exec(request.headers.authorization ?? '')
+    const device = match?.[1] ? tokens.verify('devices', match[1]) : null
+    if (!device) {
+      await reply.code(401).send({ error: 'Not paired. Pair this app with the service first.' })
+      return null
+    }
+    return device
+  }
+
+  app.post('/pair', async (request, reply) => {
+    const body = request.body as { code?: string; deviceName?: string } | undefined
+    const result = pairing.redeem(body?.code ?? '', body?.deviceName ?? '')
+    if (!result.ok) {
+      audit('unknown', 'pair.failed', { reason: result.reason }, request.ip)
+      return reply.code(403).send({ error: result.reason })
+    }
+    audit(result.id, 'pair.succeeded', { deviceName: body?.deviceName }, request.ip)
+    return reply.send({ deviceId: result.id, token: result.token })
+  })
+
+  /** Lets a paired device enrol another one without a container restart. */
+  app.post('/pair/new-code', async (request, reply) => {
+    const device = await requireDevice(request, reply)
+    if (!device) return
+    const issued = pairing.issueNewCode(generatePairingCode())
+    audit(device.id, 'pair.codeIssued', undefined, request.ip)
+    return reply.send(issued)
+  })
+
+  app.get('/settings', async (request, reply) => {
+    if (!(await requireDevice(request, reply))) return
+    return reply.send(settings.readPublic())
+  })
+
+  app.patch('/settings', async (request, reply) => {
+    const device = await requireDevice(request, reply)
+    if (!device) return
+
+    const parsed = settingsSchema.partial().safeParse(request.body)
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'Invalid settings', issues: parsed.error.issues })
+    }
+    settings.update(parsed.data)
+    // Log which keys changed, never their values.
+    audit(device.id, 'settings.updated', { keys: Object.keys(parsed.data) }, request.ip)
+    return reply.send(settings.readPublic())
+  })
+
+  /** Confirms the stored RunPod key actually works, without changing anything. */
+  app.post('/settings/verify-runpod', async (request, reply) => {
+    if (!(await requireDevice(request, reply))) return
+    try {
+      const valid = await deps.requireRunpodKey().verifyKey()
+      return reply.send({ valid })
+    } catch (error) {
+      return reply.code(400).send({ valid: false, error: (error as Error).message })
+    }
+  })
+
+  app.get('/templates', async (request, reply) => {
+    if (!(await requireDevice(request, reply))) return
+    const rows = db.prepare('SELECT config FROM templates ORDER BY name').all() as Array<{ config: string }>
+    return reply.send({ templates: rows.map((row) => JSON.parse(row.config) as Template) })
+  })
+
+  app.post('/templates', async (request, reply) => {
+    const device = await requireDevice(request, reply)
+    if (!device) return
+
+    const parsed = templateSchema.safeParse({ id: randomUUID(), ...(request.body as object) })
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'Invalid template', issues: parsed.error.issues })
+    }
+    const now = new Date().toISOString()
+    db.prepare(
+      'INSERT INTO templates (id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    ).run(parsed.data.id, parsed.data.name, JSON.stringify(parsed.data), now, now)
+    audit(device.id, 'template.created', { id: parsed.data.id, name: parsed.data.name }, request.ip)
+    return reply.code(201).send(parsed.data)
+  })
+
+  app.get('/pod', async (request, reply) => {
+    if (!(await requireDevice(request, reply))) return
+    return reply.send({ pod: pods.current(), serving: pods.describe() })
+  })
+
+  app.post('/pod/start', async (request, reply) => {
+    const device = await requireDevice(request, reply)
+    if (!device) return
+
+    const templateId = (request.body as { templateId?: string } | undefined)?.templateId
+    const template = templateId ? pods.template(templateId) : null
+    if (!template) return reply.code(400).send({ error: 'Unknown template' })
+
+    try {
+      const record = await pods.start(template)
+      audit(device.id, 'pod.start', { podId: record.id, template: template.name }, request.ip)
+      return reply.send(record)
+    } catch (error) {
+      return reply.code(502).send({ error: (error as Error).message })
+    }
+  })
+
+  app.post('/pod/stop', async (request, reply) => {
+    const device = await requireDevice(request, reply)
+    if (!device) return
+
+    const record = pods.current()
+    const template = record ? pods.template(record.templateId) : null
+    try {
+      await pods.stop(template?.lifecycleMode ?? 'recreate')
+      audit(device.id, 'pod.stop', { podId: record?.id }, request.ip)
+      return reply.send({ stopped: record?.id ?? null })
+    } catch (error) {
+      return reply.code(502).send({ error: (error as Error).message })
+    }
+  })
+
+  app.get('/client-tokens', async (request, reply) => {
+    if (!(await requireDevice(request, reply))) return
+    return reply.send({ tokens: tokens.list('client_tokens') })
+  })
+
+  app.post('/client-tokens', async (request, reply) => {
+    const device = await requireDevice(request, reply)
+    if (!device) return
+    const name = (request.body as { name?: string } | undefined)?.name ?? 'Unnamed client'
+    const issued = tokens.issue('client_tokens', name)
+    audit(device.id, 'clientToken.issued', { id: issued.id, name }, request.ip)
+    // The only time this value is ever visible.
+    return reply.code(201).send(issued)
+  })
+
+  app.delete('/client-tokens/:id', async (request, reply) => {
+    const device = await requireDevice(request, reply)
+    if (!device) return
+    const { id } = request.params as { id: string }
+    tokens.revoke('client_tokens', id)
+    audit(device.id, 'clientToken.revoked', { id }, request.ip)
+    return reply.code(204).send()
+  })
+}
