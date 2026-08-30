@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { POD_PORTS } from '@runpod-launcher/shared'
 import { errors } from './errors.js'
+import { reassembleStream } from './reassemble.js'
 
 /** What the gateway needs to know about the pod it is fronting. */
 export interface ActivePod {
@@ -142,6 +143,16 @@ export async function registerGatewayRoutes(app: FastifyInstance, deps: GatewayD
       return
     }
 
+    // Always stream from the pod, whatever the client asked for.
+    //
+    // RunPod's HTTP proxy sits behind Cloudflare, which abandons a request that
+    // produces nothing for 100 seconds. A long generation on a non-streaming
+    // call therefore dies with an HTML error page rather than an answer.
+    // Streaming keeps bytes moving; a client that wanted one object gets one,
+    // reassembled below.
+    const clientWantsStream = body?.stream === true
+    const canStream = upstreamPath !== '/v1/embeddings'
+
     let upstream: Response
     try {
       upstream = await fetch(`${upstreamBase}${upstreamPath}`, {
@@ -150,7 +161,18 @@ export async function registerGatewayRoutes(app: FastifyInstance, deps: GatewayD
           'Content-Type': 'application/json',
           Authorization: `Bearer ${pod.podApiKey}`,
         },
-        body: JSON.stringify(body ?? {}),
+        body: JSON.stringify(
+          canStream
+            ? {
+                ...(body ?? {}),
+                stream: true,
+                // Engines omit token counts from a stream unless asked. Clients
+                // use them to decide when to compact a conversation, and
+                // without them an agent has to guess its own context usage.
+                stream_options: { include_usage: true, ...(body?.stream_options as object) },
+              }
+            : (body ?? {}),
+        ),
       })
     } catch (error) {
       await reply.code(502).send(errors.upstream((error as Error).message))
@@ -183,8 +205,17 @@ export async function registerGatewayRoutes(app: FastifyInstance, deps: GatewayD
       await reply.send(await upstream.text())
       return
     }
-    // Streamed straight through, so token-by-token responses stay live and
-    // long generations never sit idle long enough to hit a proxy timeout.
+
+    if (canStream && !clientWantsStream && upstream.ok) {
+      // The client asked for a single object, so the stream is collected back
+      // into one. Tool call arguments in particular arrive in fragments and are
+      // concatenated — losing any part produces invalid JSON, which is exactly
+      // what a truncated tool call looks like from the outside.
+      reply.header('content-type', 'application/json')
+      await reply.send(await reassembleStream(upstream.body))
+      return
+    }
+
     await reply.send(upstream.body)
   }
 }
