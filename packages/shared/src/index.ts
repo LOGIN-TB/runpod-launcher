@@ -7,5 +7,7 @@ export { OPERATIONS } from './runpod/generated.js'
 
 export * from './engine.js'
 export * from './problems.js'
+export * from './presets.js'
+export * from './vram.js'
 export * from './template.js'
 export * from './settings.js'

@@ -245,3 +245,7 @@
   font-family: var(--font-mono); font-size: var(--text-xs);
   overflow-x: auto; line-height: 1.5;
 }
+
+.hit-meta { display: flex; gap: var(--space-2); align-items: center; white-space: nowrap; }
+.model-results code { overflow: hidden; text-overflow: ellipsis; }
+.engine-note { padding: var(--space-2) var(--space-3); background: var(--bg-sunken); border-radius: var(--radius); }

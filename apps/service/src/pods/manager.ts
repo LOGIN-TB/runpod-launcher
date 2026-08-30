@@ -146,11 +146,9 @@ export class PodManager {
     template: Template,
     podApiKey: string,
   ): Promise<runpod.Pod> {
+    const fallbacks = await this.usableFallbacks(client, template)
     const attempts: Array<{ gpuTypeId: string; unpinned: boolean }> = [
-      ...[template.gpuTypeId, ...template.gpuFallbackIds].map((gpuTypeId) => ({
-        gpuTypeId,
-        unpinned: false,
-      })),
+      ...[template.gpuTypeId, ...fallbacks].map((gpuTypeId) => ({ gpuTypeId, unpinned: false })),
     ]
     // Dropping the data center is only possible without a network volume: the
     // volume exists in exactly one region and the pod must be able to reach it.
@@ -227,6 +225,34 @@ export class PodManager {
     await client.podAction(podId, 'terminate').catch(() => undefined)
     this.markStopped(podId)
     return null
+  }
+
+  /**
+   * Fallback cards that are actually safe to land on.
+   *
+   * A fallback to a *smaller* card is never safe, whatever it costs. Without
+   * this check a template asking for a 96 GiB Blackwell fell back to a 48 GiB
+   * A40 and would have gone on to a 24 GiB card — quietly undoing the
+   * compatibility check that had just been run on the primary choice, and
+   * renting hardware that cannot hold the model.
+   *
+   * Enforced here as well as in the editor: a template can be created through
+   * the API, and this is the last point before money is spent.
+   */
+  private async usableFallbacks(client: RunpodClient, template: Template): Promise<string[]> {
+    if (template.gpuFallbackIds.length === 0) return []
+
+    const catalog = await client.listGpuTypes().catch(() => null)
+    // Unable to check, so no fallbacks: the user gets the card they chose or
+    // nothing. Falling back unverified is precisely the failure this guards
+    // against, and an unstartable pod is cheaper than a wrong one.
+    if (!Array.isArray(catalog?.gpus)) return []
+
+    const memory = new Map(catalog.gpus.map((gpu) => [gpu.id, gpu.memory]))
+    const primary = memory.get(template.gpuTypeId)
+    if (primary === undefined) return []
+
+    return template.gpuFallbackIds.filter((id) => (memory.get(id) ?? 0) >= primary)
   }
 
   async stop(mode: Template['lifecycleMode'], reason = 'manual'): Promise<void> {

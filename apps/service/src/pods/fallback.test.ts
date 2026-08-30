@@ -22,6 +22,19 @@ test('the capacity error is recognised, and other 400s are not', () => {
 const fetchThatSucceedsOnAttempt = (n: number, seen: string[][]): typeof fetch => {
   let calls = 0
   return (async (url: unknown, init?: RequestInit) => {
+    // Every card here is the same size, so none is filtered out as too small.
+    if (String(url).includes('/catalog/gpus')) {
+      return new Response(
+        JSON.stringify({
+          gpus: [
+            { id: 'NVIDIA L40S', memory: 48 },
+            { id: 'NVIDIA RTX 6000 Ada Generation', memory: 48 },
+            { id: 'NVIDIA A40', memory: 48 },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }
     if (String(url).endsWith('/v2/pods') && init?.method === 'POST') {
       calls += 1
       const body = JSON.parse(String(init.body)) as { gpu: { id: string }; dataCenterIds?: string[] }
@@ -92,6 +105,12 @@ test('a network volume forbids unpinning, and the error says why', async () => {
 const fetchWithVanishedPod = (created: string[]): typeof fetch =>
   (async (url: unknown, init?: RequestInit) => {
     const u = String(url)
+    if (u.includes('/catalog/gpus')) {
+      return new Response(JSON.stringify({ gpus: [{ id: 'NVIDIA L40S', memory: 48 }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
     if (/\/pods\/[^/]+\/action$/.test(u)) {
       return new Response('{"detail":"pod not found","status":404}', { status: 404 })
     }
@@ -122,4 +141,117 @@ test('a pod deleted outside the launcher is replaced, not resumed into a 404', a
 
   assert.equal(record.id, 'fresh-pod')
   assert.equal(created.length, 1, 'a replacement pod was built')
+})
+
+/** GPU sizes as RunPod reports them, for the fallback-safety tests. */
+const CATALOG = {
+  gpus: [
+    { id: 'NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition', memory: 96 },
+    { id: 'NVIDIA RTX PRO 6000 Blackwell Server Edition', memory: 96 },
+    { id: 'NVIDIA A40', memory: 48 },
+    { id: 'NVIDIA GeForce RTX 3090', memory: 24 },
+  ],
+}
+
+test('a fallback never lands on a smaller card than the one asked for', async () => {
+  // Reported from a real run: a template asking for a 96 GiB Blackwell got an
+  // A40 with 48 GiB, because the fallbacks had been chosen by price alone.
+  // The next card in that list had 24 GiB.
+  const seen: string[][] = []
+  const fetchImpl = (async (url: unknown, init?: RequestInit) => {
+    const u = String(url)
+    if (u.includes('/catalog/gpus')) {
+      return new Response(JSON.stringify(CATALOG), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    if (u.endsWith('/v2/pods') && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body)) as { gpu: { id: string }; dataCenterIds?: string[] }
+      seen.push([body.gpu.id, (body.dataCenterIds ?? []).join(',') || 'unpinned'])
+      return new Response(CAPACITY_BODY, { status: 400 })
+    }
+    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as unknown as typeof fetch
+
+  const db = openDatabase(':memory:')
+  const tpl = template({
+    gpuTypeId: 'NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition',
+    gpuFallbackIds: ['NVIDIA A40', 'NVIDIA GeForce RTX 3090', 'NVIDIA RTX PRO 6000 Blackwell Server Edition'],
+    dataCenterIds: [],
+  })
+  const now = new Date().toISOString()
+  db.prepare('INSERT INTO templates (id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+    .run('t1', 'test', JSON.stringify(tpl), now, now)
+
+  const manager = new PodManager(db, () => new RunpodClient('key', fetchImpl), () => null)
+  await assert.rejects(() => manager.start(tpl))
+
+  const tried = seen.map(([gpu]) => gpu)
+  assert.deepEqual(tried, [
+    'NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition',
+    'NVIDIA RTX PRO 6000 Blackwell Server Edition',
+  ])
+  assert.ok(!tried.includes('NVIDIA A40'), 'a 48 GiB card must not stand in for a 96 GiB one')
+  assert.ok(!tried.includes('NVIDIA GeForce RTX 3090'), 'nor a 24 GiB one')
+})
+
+test('an equally large card is a legitimate fallback', async () => {
+  const seen: string[][] = []
+  const fetchImpl = (async (url: unknown, init?: RequestInit) => {
+    const u = String(url)
+    if (u.includes('/catalog/gpus')) {
+      return new Response(JSON.stringify(CATALOG), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    if (u.endsWith('/v2/pods') && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body)) as { gpu: { id: string } }
+      seen.push([body.gpu.id])
+      if (seen.length < 2) return new Response(CAPACITY_BODY, { status: 400 })
+      return new Response(JSON.stringify({ id: 'pod1', status: 'RUNNING', cost: 2, startedAt: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as unknown as typeof fetch
+
+  const db = openDatabase(':memory:')
+  const tpl = template({
+    gpuTypeId: 'NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition',
+    gpuFallbackIds: ['NVIDIA RTX PRO 6000 Blackwell Server Edition'],
+    dataCenterIds: [],
+  })
+  const now = new Date().toISOString()
+  db.prepare('INSERT INTO templates (id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+    .run('t1', 'test', JSON.stringify(tpl), now, now)
+
+  const manager = new PodManager(db, () => new RunpodClient('key', fetchImpl), () => null)
+  const record = await manager.start(tpl)
+  assert.equal(record.id, 'pod1')
+  assert.equal(seen.length, 2)
+})
+
+test('an unreadable GPU catalog means no fallbacks, not unchecked ones', async () => {
+  // Falling back without being able to verify size is the exact failure this
+  // guards against. An unstartable pod is cheaper than a wrong one.
+  const seen: string[][] = []
+  const fetchImpl = (async (url: unknown, init?: RequestInit) => {
+    const u = String(url)
+    if (u.includes('/catalog/gpus')) return new Response('upstream down', { status: 502 })
+    if (u.endsWith('/v2/pods') && init?.method === 'POST') {
+      seen.push([(JSON.parse(String(init.body)) as { gpu: { id: string } }).gpu.id])
+      return new Response(CAPACITY_BODY, { status: 400 })
+    }
+    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as unknown as typeof fetch
+
+  const db = openDatabase(':memory:')
+  const tpl = template({ dataCenterIds: [] })
+  const now = new Date().toISOString()
+  db.prepare('INSERT INTO templates (id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+    .run('t1', 'test', JSON.stringify(tpl), now, now)
+
+  const manager = new PodManager(db, () => new RunpodClient('key', fetchImpl), () => null)
+  await assert.rejects(() => manager.start(tpl))
+  assert.deepEqual(seen.map(([gpu]) => gpu), ['NVIDIA L40S'], 'only the card that was asked for')
 })

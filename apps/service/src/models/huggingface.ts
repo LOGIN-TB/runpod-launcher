@@ -1,5 +1,14 @@
 import type { Engine, Problem, WeightFormat } from '@runpod-launcher/shared'
-import { checkCompatibility, problem } from '@runpod-launcher/shared'
+import {
+  bytesToGib,
+  checkCompatibility,
+  engineForFormat,
+  estimateKvHeadroomGib,
+  problem,
+  UNUSABLE_FORMATS,
+} from '@runpod-launcher/shared'
+
+const round1 = (value: number): number => Math.round(value * 10) / 10
 
 const API = 'https://huggingface.co/api'
 
@@ -9,6 +18,10 @@ export interface ModelSearchHit {
   likes: number
   pipelineTag: string | null
   gated: boolean
+  /** Guessed from the name, so the list can show it without fetching each repo. */
+  format: WeightFormat
+  /** Which engine would serve it, or null if nothing here can. */
+  engine: Engine | null
 }
 
 /** One downloadable quantisation inside a GGUF repository. */
@@ -69,33 +82,69 @@ export class HuggingFaceClient {
     return token ? { Authorization: `Bearer ${token}`, Accept: 'application/json' } : { Accept: 'application/json' }
   }
 
-  /** Searches the hub, restricted to models that suit the given slot. */
+  /**
+   * Searches the hub for models that suit the given slot.
+   *
+   * Deliberately not a single tagged query. Quantised repositories very often
+   * carry no `pipeline_tag` at all — every GGUF build of Qwen3.8 is untagged —
+   * so a tag-filtered search makes exactly the small, cheap variants people
+   * want invisible while showing the full-size original.
+   *
+   * The untagged sweep is therefore run alongside the tagged ones and merged.
+   */
   async search(query: string, kind: Kind, limit = 20): Promise<ModelSearchHit[]> {
-    const results = await Promise.all(
-      SLOT_TAGS[kind].map(async (tag) => {
+    const queries: Array<Record<string, string>> = [
+      ...SLOT_TAGS[kind].map((tag) => ({ pipeline_tag: tag })),
+      // No tag: catches the quantised builds, which are usually untagged.
+      {},
+    ]
+
+    const pages = await Promise.all(
+      queries.map(async (extra) => {
         const url = new URL(`${API}/models`)
         url.searchParams.set('search', query)
-        url.searchParams.set('pipeline_tag', tag)
         url.searchParams.set('sort', 'downloads')
         url.searchParams.set('direction', '-1')
-        url.searchParams.set('limit', String(limit))
+        url.searchParams.set('limit', String(limit * 2))
+        for (const [key, value] of Object.entries(extra)) url.searchParams.set(key, value)
         const response = await this.fetchImpl(url, { headers: this.headers() })
         if (!response.ok) return []
         return (await response.json()) as Array<Record<string, unknown>>
       }),
     )
 
-    return results
-      .flat()
-      .map((raw) => ({
-        repoId: String(raw.id ?? raw.modelId ?? ''),
+    const seen = new Map<string, ModelSearchHit>()
+    for (const raw of pages.flat()) {
+      const repoId = String(raw.id ?? raw.modelId ?? '')
+      if (!repoId || seen.has(repoId)) continue
+
+      const format = detectFormat(repoId, [])
+      const engine = engineForFormat(format)
+
+      // Dropped rather than shown as incompatible: an MLX build cannot run on
+      // rented NVIDIA hardware under any circumstances, and its huge download
+      // count would otherwise push the usable quantisations off the list.
+      if (UNUSABLE_FORMATS.includes(format)) continue
+
+      seen.set(repoId, {
+        repoId,
         downloads: Number(raw.downloads ?? 0),
         likes: Number(raw.likes ?? 0),
         pipelineTag: (raw.pipeline_tag as string | undefined) ?? null,
         gated: Boolean(raw.gated),
-      }))
-      .filter((hit) => hit.repoId.length > 0)
-      .sort((a, b) => b.downloads - a.downloads)
+        format,
+        engine,
+      })
+    }
+
+    // Quantised builds first, then by popularity. Someone searching from this
+    // app is renting a GPU by the hour; the smaller build is nearly always the
+    // one they want, and sorting by downloads alone buries it.
+    const quantised = (hit: ModelSearchHit): number =>
+      hit.format === 'unknown' || hit.format === 'bf16' || hit.format === 'fp16' ? 1 : 0
+
+    return [...seen.values()]
+      .sort((a, b) => quantised(a) - quantised(b) || b.downloads - a.downloads)
       .slice(0, limit)
   }
 
@@ -205,48 +254,6 @@ export class HuggingFaceClient {
   }
 }
 
-const BYTES_PER_GIB = 1024 ** 3
-
-const round1 = (value: number): number => Math.round(value * 10) / 10
-
-/** HuggingFace reports file sizes in decimal bytes; GPUs and vLLM talk in GiB. */
-export const bytesToGib = (bytes: number): number => bytes / BYTES_PER_GIB
-
-/**
- * Estimates how much VRAM is left for the KV cache, in **GiB**.
- *
- * Everything here is GiB on purpose. Card capacities and vLLM's own numbers are
- * GiB, while HuggingFace file sizes are decimal bytes — mixing the two is a 7%
- * error, which on a 48 GiB card invents 3.5 GB of headroom that is not there.
- *
- * Two deductions beyond the weights:
- *  - `--gpu-memory-utilization` caps what the engine may touch at all.
- *  - CUDA context, activations and captured CUDA graphs take a slice on top.
- *
- * That second slice is proportional, not fixed. Measured on 2026-08-30, same
- * engine and settings:
- *
- *   L40S 48 GiB, FP8     45.12 usable - 28.51 weights - 10.58 KV = 6.03 overhead
- *   L40S 48 GiB, INT4    45.12 usable - 17.71 weights - 21.58 KV = 5.83 overhead
- *   RTX PRO 4500 32 GiB  30.08 usable - 17.71 weights -  9.38 KV = 2.99 overhead
- *
- * A fixed 6 GiB fits the first two and is twice the truth on the third. 12% of
- * the capped budget lands within about 0.6 GiB of all three, so that is what is
- * used — with the caveat that it is a fit to three points, not a model of what
- * the allocator actually does. Treat the result as an estimate to warn on, not
- * a promise.
- */
-export function estimateKvHeadroomGib(args: {
-  gpuMemoryGib: number
-  weightsGib: number
-  otherSlotGib?: number
-  utilization?: number
-}): number {
-  const OVERHEAD_SHARE = 0.12
-  const usable = args.gpuMemoryGib * (args.utilization ?? 0.94)
-  return usable * (1 - OVERHEAD_SHARE) - args.weightsGib - (args.otherSlotGib ?? 0)
-}
-
 /**
  * Groups a GGUF repository's files into one entry per quantisation.
  *
@@ -298,6 +305,7 @@ export function detectFormat(
   quantConfig?: { quant_method?: string; fmt?: string },
 ): WeightFormat {
   if (filenames.some((name) => /\.gguf$/i.test(name))) return 'gguf'
+  if (/\bmlx\b/i.test(repoId)) return 'mlx'
 
   const method = (quantConfig?.quant_method ?? '').toLowerCase()
   if (method.includes('awq')) return 'awq'
@@ -310,6 +318,8 @@ export function detectFormat(
 
   const name = repoId.toLowerCase()
   if (name.includes('gguf')) return 'gguf'
+  if (/\bmlx\b/.test(name)) return 'mlx'
+  if (name.includes('nvfp4')) return 'nvfp4'
   if (name.includes('awq') || /w4a16|int4/.test(name)) return 'awq'
   if (name.includes('gptq')) return 'gptq'
   if (name.includes('fp8')) return 'fp8'

@@ -1,13 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { FP8_SUPPORT_FIXTURE, gpuSupportsFp8 } from '@runpod-launcher/shared'
+import { bytesToGib, estimateKvHeadroomGib, FP8_SUPPORT_FIXTURE, gpuSupportsFp8 } from '@runpod-launcher/shared'
 import {
   detectFormat,
   groupGgufVariants,
   HuggingFaceClient,
   pickDefaultGgufVariant,
-  estimateKvHeadroomGib,
-  bytesToGib,
 } from './huggingface.js'
 
 test('the weight format comes from metadata first, then the name', () => {

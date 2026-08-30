@@ -65,6 +65,9 @@ export interface ModelHit {
   downloads: number
   pipelineTag: string | null
   gated: boolean
+  format: string
+  /** Which engine would serve it. Shown so the choice is never silent. */
+  engine: 'vllm' | 'llamacpp' | null
 }
 
 export interface ModelVerdict {

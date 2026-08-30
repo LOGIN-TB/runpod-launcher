@@ -107,12 +107,18 @@ export function ModelPicker({
 
       {hits.length > 0 ? (
         <ul className="model-results">
-          {hits.slice(0, 8).map((hit) => (
+          {hits.slice(0, 10).map((hit) => (
             <li key={hit.repoId}>
               <button type="button" onClick={() => setQuery(hit.repoId)}>
                 <code>{hit.repoId}</code>
-                <span className="muted small">
-                  {t('model.downloads', { count: number(hit.downloads, { notation: 'compact' }) })}
+                <span className="hit-meta">
+                  {/* The format decides which engine runs, and whether the
+                      model fits at all. Hiding it until after the choice is
+                      what made every result look interchangeable. */}
+                  <Badge tone={hit.engine ? 'neutral' : 'danger'}>{hit.format.toUpperCase()}</Badge>
+                  <span className="muted small">
+                    {t('model.downloads', { count: number(hit.downloads, { notation: 'compact' }) })}
+                  </span>
                 </span>
               </button>
             </li>

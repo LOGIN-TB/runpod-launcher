@@ -12,7 +12,8 @@
     }
   },
   "scripts": {
-    "build": "tsc -b"
+    "build": "tsc -b",
+    "test": "tsc -b && node --test \"dist/**/*.test.js\""
   },
   "dependencies": {
     "zod": "^4.1.5"

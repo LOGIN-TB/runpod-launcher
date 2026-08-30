@@ -1,12 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import type { Template } from '@runpod-launcher/shared'
+import { presetForFormat, suitableGpus, VLLM_PRESET } from '@runpod-launcher/shared'
 import { api, type Connection, type GpuType, type ModelVerdict } from '../lib/api.js'
 import { useI18n } from '../lib/i18n.js'
 import { Badge, Button, Card, EmptyState, Field, Input } from '../components/primitives.js'
 import { ModelPicker } from '../components/ModelPicker.js'
 import { ScheduleEditor } from '../components/ScheduleEditor.js'
-
-const DEFAULT_IMAGE = 'vllm/vllm-openai:v0.28.0'
 
 export function Templates({
   connection,
@@ -133,6 +132,35 @@ function TemplateEditor({
   const chatBytes = chat.verdict?.details.weightBytes ?? 0
   const embeddingBytes = useEmbedding ? (embedding.verdict?.details.weightBytes ?? 0) : 0
 
+  // The engine follows from the weights, it is not a separate choice. A GGUF
+  // build only runs under llama.cpp; everything else under vLLM.
+  const format = (chat.verdict?.details.format ?? embedding.verdict?.details.format ?? 'unknown') as
+    Parameters<typeof presetForFormat>[0]
+  const preset = presetForFormat(format) ?? VLLM_PRESET
+
+  /**
+   * Fallback cards, restricted to ones that can actually hold the model.
+   *
+   * Choosing these by price alone is how a template asking for a 96 GiB card
+   * ended up on a 48 GiB one: the fallback quietly undid the compatibility
+   * check that had just passed on the primary choice.
+   */
+  const fallbacks = gpu
+    ? suitableGpus(
+        gpus.filter((candidate) => candidate.id !== gpu.id && candidate.memory >= gpu.memory),
+        {
+          format,
+          weightsGib: (chatBytes + embeddingBytes) / 1024 ** 3,
+          // Never more than the card that was chosen: a substitute should not
+          // cost more than the original.
+          maxPricePerHour: gpu.price.secure,
+        },
+      )
+        .sort((a, b) => (a.price.secure ?? 99) - (b.price.secure ?? 99))
+        .slice(0, 3)
+        .map((candidate) => candidate.id)
+    : []
+
   const blocked =
     !name ||
     !gpu ||
@@ -146,20 +174,18 @@ function TemplateEditor({
     try {
       await api.createTemplate(connection, {
         name,
-        engine: 'vllm',
-        image: DEFAULT_IMAGE,
+        engine: preset.engine,
+        image: preset.image,
         chatModel: chat.repoId ? { repoId: chat.repoId } : null,
         embeddingModel: useEmbedding && embedding.repoId ? { repoId: embedding.repoId } : null,
         gpuTypeId: gpu!.id,
-        gpuFallbackIds: gpus.slice(0, 4).map((candidate) => candidate.id).filter((id) => id !== gpu!.id),
+        gpuFallbackIds: fallbacks,
         maxModelLen: Number(maxLen),
         maxConcurrentSequences: Number(maxSeqs),
         lifecycleMode: sleepMode,
         schedule,
         networkVolumeId: null,
-        args:
-          '{{chatModel}} --port 8000 --host 0.0.0.0 --api-key {{apiKey}} --max-model-len {{maxModelLen}}' +
-          ' --gpu-memory-utilization {{chatGpuFraction}} --max-num-seqs {{maxConcurrentSequences}}',
+        args: chat.repoId ? preset.chatArgs : preset.embeddingArgs,
       })
       onDone()
     } catch (cause) {
@@ -192,7 +218,7 @@ function TemplateEditor({
       <ModelPicker
         connection={connection}
         kind="chat"
-        engine="vllm"
+        engine={preset.engine}
         gpu={gpu}
         otherSlotBytes={embeddingBytes}
         value={chat.repoId}
@@ -208,7 +234,7 @@ function TemplateEditor({
         <ModelPicker
           connection={connection}
           kind="embedding"
-          engine="vllm"
+          engine={preset.engine}
           gpu={gpu}
           otherSlotBytes={chatBytes}
           value={embedding.repoId}
@@ -238,6 +264,12 @@ function TemplateEditor({
           </label>
         </div>
       </Field>
+
+      {/* The engine is derived, not chosen — but it is shown, because it
+          decides which quantisations are usable at all. */}
+      {chat.verdict || embedding.verdict ? (
+        <p className="muted small engine-note">{preset.note}</p>
+      ) : null}
 
       <h3>{t('schedule.title')}</h3>
       <ScheduleEditor schedule={schedule} timezone={schedule.timezone} onChange={setSchedule} />
