@@ -16,6 +16,10 @@
     "typecheck": "tsc -b",
     "dev:service": "npm run dev -w @runpod-launcher/service",
     "gen:runpod": "node tools/generate-runpod-types.mjs",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "screenshots": "node tools/screenshots/capture.mjs"
+  },
+  "devDependencies": {
+    "wait-on": "^9.1.0"
   }
 }

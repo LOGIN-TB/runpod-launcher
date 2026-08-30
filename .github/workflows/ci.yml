@@ -17,6 +17,33 @@ jobs:
       - run: npm run build
       - run: npm test
 
+  # Screenshots are generated, not committed by hand. Running the pipeline in CI
+  # is what stops the in-app help from illustrating a version of the interface
+  # that no longer exists.
+  screenshots:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: Capture
+        run: |
+          DATA_DIR=./ci-data PORT=8080 ALLOW_UI_ORIGIN=http://localhost:5173 \
+            node apps/service/dist/index.js > service.log 2>&1 &
+          npm run dev -w @runpod-launcher/desktop > ui.log 2>&1 &
+          npx wait-on http://localhost:8080/health http://localhost:5173 -t 60000
+          CODE=$(grep -oE '[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}' service.log | head -1)
+          TOKEN=$(node tools/screenshots/seed.mjs http://localhost:8080 "$CODE")
+          DEVICE_TOKEN="$TOKEN" node tools/screenshots/capture.mjs \
+            --ui http://localhost:5173 --service http://localhost:8080
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: docs/screenshots/
+
   # The pod image is built but not pushed here: it is large and only changes
   # when the entrypoint or the pinned vLLM version does.
   docker:

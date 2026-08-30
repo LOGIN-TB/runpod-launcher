@@ -8,8 +8,10 @@ import { Overview } from './screens/Overview.js'
 import { Templates } from './screens/Templates.js'
 import { Clients } from './screens/Clients.js'
 import { Settings } from './screens/Settings.js'
+import { Help } from './screens/Help.js'
+import { Setup } from './screens/Setup.js'
 
-type Screen = 'overview' | 'templates' | 'clients' | 'settings'
+type Screen = 'overview' | 'templates' | 'clients' | 'settings' | 'help'
 
 export function App(): ReactNode {
   const { t } = useI18n()
@@ -19,6 +21,7 @@ export function App(): ReactNode {
   const [loading, setLoading] = useState(true)
   const [screen, setScreen] = useState<Screen>('overview')
   const [templates, setTemplates] = useState<Template[]>([])
+  const [showSetup, setShowSetup] = useState(true)
 
   const reloadTemplates = useCallback(async (): Promise<void> => {
     if (!connection) return
@@ -60,6 +63,7 @@ export function App(): ReactNode {
     { id: 'templates', label: t('nav.templates') },
     { id: 'clients', label: t('nav.clients') },
     { id: 'settings', label: t('nav.settings') },
+    { id: 'help', label: t('nav.help') },
   ]
 
   return (
@@ -80,6 +84,12 @@ export function App(): ReactNode {
       </nav>
 
       <main className="content">
+        {/* The guide sits above whatever screen is open and disappears on its
+            own once every step checks out. */}
+        {showSetup && screen !== 'help' ? (
+          <Setup connection={connection} onGo={setScreen} onDismiss={() => setShowSetup(false)} />
+        ) : null}
+
         {screen === 'overview' ? (
           <Overview connection={connection} templates={templates} onGoToTemplates={() => setScreen('templates')} />
         ) : null}
@@ -88,6 +98,7 @@ export function App(): ReactNode {
         ) : null}
         {screen === 'clients' ? <Clients connection={connection} /> : null}
         {screen === 'settings' ? <Settings connection={connection} /> : null}
+        {screen === 'help' ? <Help /> : null}
       </main>
     </div>
   )

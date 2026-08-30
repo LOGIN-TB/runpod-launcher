@@ -220,3 +220,28 @@
 .amount-value { font-size: var(--text-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
 .amount-limit { font-size: var(--text-xs); color: var(--text-faint); }
 .amount.over .amount-value { color: var(--danger); }
+
+/* --- setup guide and help --- */
+.setup-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.setup-steps li { padding: var(--space-3); border-radius: var(--radius); border: 1px solid var(--border); display: flex; flex-direction: column; gap: var(--space-2); }
+.setup-steps li.current { border-color: var(--accent); background: var(--accent-subtle); }
+/* Completed steps are quietened, not struck through: a line through a task
+   reads as cancelled rather than done. */
+.setup-steps li.done { border-color: transparent; background: var(--bg-sunken); }
+.setup-steps li.done strong { color: var(--text-muted); font-weight: 500; }
+.setup-steps li.later { opacity: 0.55; }
+
+.tabs { display: flex; gap: var(--space-1); border-bottom: 1px solid var(--border); }
+.tab {
+  font: inherit; background: none; border: 0; cursor: pointer;
+  padding: var(--space-2) var(--space-3); color: var(--text-muted);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 500; }
+
+.code-block {
+  margin: 0; padding: var(--space-3);
+  background: var(--bg-sunken); border-radius: var(--radius);
+  font-family: var(--font-mono); font-size: var(--text-xs);
+  overflow-x: auto; line-height: 1.5;
+}
