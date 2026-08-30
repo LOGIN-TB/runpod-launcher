@@ -8,6 +8,7 @@ import type { TokenStore } from '../auth/tokens.js'
 import type { PodManager } from '../pods/manager.js'
 import type { PairingService } from '../auth/pairing.js'
 import type { RunpodClient } from '../runpod/client.js'
+import type { HuggingFaceClient } from '../models/huggingface.js'
 
 export interface AdminDeps {
   db: Db
@@ -16,6 +17,7 @@ export interface AdminDeps {
   pods: PodManager
   pairing: PairingService
   requireRunpodKey: () => RunpodClient
+  huggingface: HuggingFaceClient
 }
 
 const BEARER = /^Bearer\s+(.+)$/i
@@ -132,6 +134,54 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps)
    * cards sits at LOW and shifts within minutes; a stale "available" is how the
    * nightly rebuild silently fails to come back up.
    */
+  /** Searches HuggingFace, scoped to models that suit the chosen slot. */
+  app.get('/models/search', async (request, reply) => {
+    if (!(await requireDevice(request, reply))) return
+    const query = request.query as { q?: string; kind?: string }
+    if (!query.q) return reply.code(400).send({ error: 'q is required' })
+    const kind = query.kind === 'embedding' ? 'embedding' : 'chat'
+    try {
+      return reply.send({ models: await deps.huggingface.search(query.q, kind) })
+    } catch (error) {
+      return reply.code(502).send({ error: (error as Error).message })
+    }
+  })
+
+  /**
+   * Answers "will this run here?" before a pod is rented — format against
+   * engine, format against GPU, and size against VRAM.
+   */
+  app.post('/models/evaluate', async (request, reply) => {
+    if (!(await requireDevice(request, reply))) return
+    const body = request.body as {
+      repoId?: string
+      revision?: string
+      kind?: string
+      engine?: string
+      gpuDisplayName?: string
+      gpuMemoryGb?: number
+      otherSlotBytes?: number
+    }
+    if (!body?.repoId || !body.gpuDisplayName || !body.gpuMemoryGb) {
+      return reply.code(400).send({ error: 'repoId, gpuDisplayName and gpuMemoryGb are required' })
+    }
+    try {
+      return reply.send(
+        await deps.huggingface.evaluate({
+          repoId: body.repoId,
+          ...(body.revision ? { revision: body.revision } : {}),
+          kind: body.kind === 'embedding' ? 'embedding' : 'chat',
+          engine: body.engine === 'llamacpp' ? 'llamacpp' : 'vllm',
+          gpuDisplayName: body.gpuDisplayName,
+          gpuMemoryGb: body.gpuMemoryGb,
+          ...(body.otherSlotBytes ? { otherSlotBytes: body.otherSlotBytes } : {}),
+        }),
+      )
+    } catch (error) {
+      return reply.code(502).send({ error: (error as Error).message })
+    }
+  })
+
   app.get('/catalog/gpus', async (request, reply) => {
     if (!(await requireDevice(request, reply))) return
     try {

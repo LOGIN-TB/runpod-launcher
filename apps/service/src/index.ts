@@ -9,6 +9,7 @@ import { PodManager } from './pods/manager.js'
 import { registerGatewayRoutes } from './gateway/routes.js'
 import { registerAdminRoutes } from './admin/routes.js'
 import { PairingService } from './auth/pairing.js'
+import { HuggingFaceClient } from './models/huggingface.js'
 
 const config = loadConfig()
 const app = Fastify({
@@ -33,6 +34,7 @@ const requireRunpodKey = (): RunpodClient => {
 
 const pods = new PodManager(db, requireRunpodKey, () => settings.secret('huggingfaceToken'))
 const pairing = new PairingService(db, tokens, config.pairingCode ?? generatePairingCode())
+const huggingface = new HuggingFaceClient(() => settings.secret('huggingfaceToken'))
 
 app.get('/health', async () => ({
   status: 'ok',
@@ -67,7 +69,7 @@ await registerGatewayRoutes(app, {
   wakeWaitSeconds: () => settings.read().wakeWaitSeconds,
 })
 
-await registerAdminRoutes(app, { db, settings, tokens, pods, pairing, requireRunpodKey })
+await registerAdminRoutes(app, { db, settings, tokens, pods, pairing, requireRunpodKey, huggingface })
 
 const address = await app.listen({ port: config.port, host: config.host })
 app.log.info({ address, tlsMode: config.tlsMode }, 'launcher service listening')
