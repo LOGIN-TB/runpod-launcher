@@ -1,7 +1,17 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the interface is allowed to do. Kept to the minimum: the app talks to one service over HTTP, which the webview does itself, so no filesystem or shell access is granted.",
+  "description": "What the interface is allowed to do. HTTP is performed from Rust so the app is not bound by webview CORS when talking to a service at whatever address the user gives. Any host is allowed because that address is the user's own choice; no filesystem or shell access is granted.",
   "windows": ["main"],
-  "permissions": ["core:default", "opener:default"]
+  "permissions": [
+    "core:default",
+    "opener:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "http://*:*" },
+        { "url": "https://*:*" }
+      ]
+    }
+  ]
 }

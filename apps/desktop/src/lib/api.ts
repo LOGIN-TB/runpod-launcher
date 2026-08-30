@@ -1,4 +1,5 @@
 import type { Problem, PublicSettings, Template } from '@runpod-launcher/shared'
+import { serviceFetch } from './http.js'
 
 /**
  * Talks to the launcher service.
@@ -25,7 +26,7 @@ export interface Connection {
 async function request<T>(connection: Connection, path: string, init: RequestInit = {}): Promise<T> {
   let response: Response
   try {
-    response = await fetch(new URL(path, connection.baseUrl), {
+    response = await serviceFetch(new URL(path, connection.baseUrl), {
       ...init,
       headers: {
         Authorization: `Bearer ${connection.token}`,
@@ -104,7 +105,7 @@ export interface ClientToken {
 export const api = {
   /** Exchanges a pairing code for a device token. Needs no token itself. */
   async pair(baseUrl: string, code: string, deviceName: string): Promise<{ token: string; deviceId: string }> {
-    const response = await fetch(new URL('/pair', baseUrl), {
+    const response = await serviceFetch(new URL('/pair', baseUrl), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, deviceName }),
@@ -114,7 +115,7 @@ export const api = {
     return { token: body.token, deviceId: body.deviceId ?? '' }
   },
 
-  health: (baseUrl: string) => fetch(new URL('/health', baseUrl)).then((r) => r.json()),
+  health: (baseUrl: string) => serviceFetch(new URL('/health', baseUrl)).then((r) => r.json()),
 
   settings: (c: Connection) => request<PublicSettings>(c, '/settings'),
   saveSettings: (c: Connection, patch: Record<string, unknown>) =>

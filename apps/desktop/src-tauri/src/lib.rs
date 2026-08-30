@@ -83,6 +83,7 @@ fn set_tray_status(app: tauri::AppHandle, running: bool, cost_per_hour: f64) -> 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_http::init())
         .invoke_handler(tauri::generate_handler![
             save_connection,
             load_connection,

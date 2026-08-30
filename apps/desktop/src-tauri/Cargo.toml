@@ -15,6 +15,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
+# Performs the app's HTTP calls from Rust rather than from the webview.
+# A webview is bound by CORS; a desktop app talking to the user's own service
+# must not be, or every user would have to configure CORS for their own URL.
+tauri-plugin-http = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The device token belongs in the OS credential store, not in a file next to

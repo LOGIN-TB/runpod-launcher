@@ -28,6 +28,7 @@ export function registerCors(
   settings: SettingsStore,
   devOrigin: string | undefined,
 ): void {
+  const refused = new Set<string>()
   const allowed = (origin: string): boolean => {
     if (APP_ORIGINS.includes(origin)) return true
     if (devOrigin && origin === devOrigin) return true
@@ -37,7 +38,21 @@ export function registerCors(
 
   app.addHook('onSend', async (request, reply) => {
     const origin = request.headers.origin
-    if (!origin || !allowed(origin)) return
+    if (!origin) return
+
+    if (!allowed(origin)) {
+      // Named once per origin. A blocked response looks identical to an
+      // unreachable service from inside a webview, and without this line the
+      // only way to tell them apart is to guess.
+      if (!refused.has(origin)) {
+        refused.add(origin)
+        app.log.warn(
+          { origin },
+          'refused a cross-origin request; add this origin to corsOrigins if it is yours',
+        )
+      }
+      return
+    }
     reply.header('access-control-allow-origin', origin)
     reply.header('access-control-allow-headers', 'authorization, content-type')
     reply.header('access-control-allow-methods', 'GET, POST, PATCH, DELETE, OPTIONS')
