@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the interface is allowed to do. Kept to the minimum: the app talks to one service over HTTP, which the webview does itself, so no filesystem or shell access is granted.",
+  "windows": ["main"],
+  "permissions": ["core:default", "opener:default"]
+}

@@ -4,6 +4,7 @@ import { api, ApiError, type Connection, type PodView } from '../lib/api.js'
 import { useI18n } from '../lib/i18n.js'
 import { Badge, Button, Card, EmptyState } from '../components/primitives.js'
 import { CopyField } from '../components/CopyField.js'
+import { setTrayStatus } from '../lib/storage.js'
 
 const POLL_MS = 5_000
 
@@ -34,6 +35,8 @@ export function Overview({
         if (!cancelled) {
           setView(next)
           setError(null)
+          // Keeps the menu bar honest even while the window is closed.
+          void setTrayStatus(next.pod?.status === 'RUNNING', next.pod?.costPerHour ?? 0)
         }
       } catch (cause) {
         if (!cancelled) setError(describe(cause, t))

@@ -124,9 +124,28 @@ npm run dev -w @runpod-launcher/desktop
 `ALLOW_UI_ORIGIN` is development only: the built app is served from the same
 origin, so production never needs it.
 
-The Tauri wrapper is not built yet — it needs a Rust toolchain (`rustup`). The
-interface is finished and runs in any browser meanwhile; wrapping it changes no
-application code.
+### The desktop app
+
+```bash
+npm run app:dev -w @runpod-launcher/desktop      # dev, with hot reload
+npm run app:build -w @runpod-launcher/desktop    # a .app / .exe
+```
+
+Needs a Rust toolchain (`rustup`). The result is about 3 MB, because the app
+uses the operating system's own web view rather than shipping a browser.
+
+`app:build` deliberately produces only the application, not a `.dmg`. Building a
+DMG runs an AppleScript that arranges the Finder window, and macOS refuses that
+unless Terminal has been granted Automation access to Finder in System Settings
+→ Privacy & Security. The failure says nothing about the code, so it is not in
+the default script — `npm run app:build:dmg` does the full bundle when the
+permission is in place, and CI builds installers for both platforms on tagged
+releases.
+
+The device token is kept in the macOS Keychain or the Windows Credential
+Manager. In a plain browser there is no such place and it falls back to
+`localStorage`, which is fine for development and worse in every other way: any
+script on the page can read it, and it travels in a disk backup in clear.
 
 `npm run gen:runpod` regenerates the RunPod API types from
 `https://api.runpod.io/v2/openapi.json`. They are generated rather than

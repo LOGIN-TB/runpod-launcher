@@ -5,3 +5,8 @@ data/
 .DS_Store
 .env
 .env.*
+
+# Rust / Tauri
+target/
+apps/desktop/src-tauri/gen/
+dist-types/

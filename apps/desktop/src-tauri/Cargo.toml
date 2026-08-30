@@ -1,0 +1,30 @@
+[package]
+name = "runpod-launcher"
+version = "0.0.1"
+description = "Launcher for RunPod GPU pods serving OpenAI-compatible endpoints"
+edition = "2021"
+rust-version = "1.82"
+
+[lib]
+name = "runpod_launcher_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The device token belongs in the OS credential store, not in a file next to
+# the app. `keyring` talks to the macOS Keychain and the Windows Credential
+# Manager through one interface.
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

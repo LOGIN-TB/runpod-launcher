@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import type { Template } from '@runpod-launcher/shared'
 import { api, type Connection } from './lib/api.js'
+import { loadConnection, saveConnection } from './lib/storage.js'
 import { useI18n } from './lib/i18n.js'
 import { Pairing } from './screens/Pairing.js'
 import { Overview } from './screens/Overview.js'
@@ -8,13 +9,14 @@ import { Templates } from './screens/Templates.js'
 import { Clients } from './screens/Clients.js'
 import { Settings } from './screens/Settings.js'
 
-const STORAGE_KEY = 'launcher.connection'
-
 type Screen = 'overview' | 'templates' | 'clients' | 'settings'
 
 export function App(): ReactNode {
   const { t } = useI18n()
-  const [connection, setConnection] = useState<Connection | null>(loadConnection)
+  // The credential store is asynchronous, so the connection is loaded rather
+  // than read synchronously at first render.
+  const [connection, setConnection] = useState<Connection | null>(null)
+  const [loading, setLoading] = useState(true)
   const [screen, setScreen] = useState<Screen>('overview')
   const [templates, setTemplates] = useState<Template[]>([])
 
@@ -29,14 +31,24 @@ export function App(): ReactNode {
   }, [connection])
 
   useEffect(() => {
+    void loadConnection()
+      .then(setConnection)
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
     void reloadTemplates()
   }, [reloadTemplates])
+
+  // Rendering the pairing screen before the keychain has answered would flash
+  // it in front of someone who paired months ago.
+  if (loading) return <div className="centre-page" />
 
   if (!connection) {
     return (
       <Pairing
         onPaired={(next) => {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+          void saveConnection(next)
           setConnection(next)
         }}
       />
@@ -79,15 +91,4 @@ export function App(): ReactNode {
       </main>
     </div>
   )
-}
-
-function loadConnection(): Connection | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as Connection
-    return parsed.baseUrl && parsed.token ? parsed : null
-  } catch {
-    return null
-  }
 }

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- A power switch over a card slot: the app's whole job is turning rented
+       hardware on and off. -->
+  <rect width="512" height="512" rx="112" fill="#2f6f4e"/>
+  <g fill="none" stroke="#eaf2ed" stroke-width="34" stroke-linecap="round">
+    <path d="M168 196a112 112 0 1 0 176 0"/>
+    <path d="M256 128v104"/>
+  </g>
+  <g fill="#eaf2ed" opacity="0.55">
+    <rect x="150" y="378" width="212" height="16" rx="8"/>
+    <rect x="182" y="412" width="148" height="16" rx="8"/>
+  </g>
+</svg>
