@@ -8,6 +8,7 @@ import { RunpodClient } from './runpod/client.js'
 import { PodManager } from './pods/manager.js'
 import { registerGatewayRoutes } from './gateway/routes.js'
 import { registerAdminRoutes } from './admin/routes.js'
+import { registerCors } from './http/cors.js'
 import { PairingService } from './auth/pairing.js'
 import { HuggingFaceClient } from './models/huggingface.js'
 import { SpendTracker } from './scheduler/spend.js'
@@ -45,22 +46,9 @@ const spend = new SpendTracker(db, requireRunpodKey, () => settings.read().timez
 const notifier = new Notifier(settings, app.log)
 const scheduler = new Scheduler(db, settings, pods, spend, notifier, app.log)
 
-/**
- * Lets the UI's dev server talk to the service.
- *
- * Only in development: the built app is served from the same origin (or from
- * Tauri's own scheme), so production never needs this. Origins the gateway
- * accepts are configured separately, in settings.
- */
-if (process.env.ALLOW_UI_ORIGIN) {
-  const allowed = process.env.ALLOW_UI_ORIGIN
-  app.addHook('onSend', async (request, reply) => {
-    reply.header('access-control-allow-origin', allowed)
-    reply.header('access-control-allow-headers', 'authorization, content-type')
-    reply.header('access-control-allow-methods', 'GET, POST, PATCH, DELETE, OPTIONS')
-  })
-  app.options('/*', async (_request, reply) => reply.code(204).send())
-}
+// The desktop app's webview has its own origin, so every call it makes is
+// cross-origin. Without this the app cannot reach the service at all.
+registerCors(app, settings, process.env.ALLOW_UI_ORIGIN)
 
 app.get('/health', async () => ({
   status: 'ok',
