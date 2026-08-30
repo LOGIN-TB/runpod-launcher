@@ -1,0 +1,129 @@
+/*
+ * Design tokens.
+ *
+ * Every colour, space and size in the app comes from here. The rule is that a
+ * component never invents a value — that is what keeps twelve screens looking
+ * like one program instead of twelve.
+ *
+ * The palette is deliberately restrained: this is a tool that spends money by
+ * the hour, and the only things that should catch the eye are the running state
+ * and the cost.
+ */
+:root {
+  color-scheme: light dark;
+
+  /* Neutrals carry the interface. */
+  --bg: #fbfbfa;
+  --bg-raised: #ffffff;
+  --bg-sunken: #f2f2f0;
+  --border: #e2e2de;
+  --border-strong: #c9c9c3;
+  --text: #1a1a18;
+  --text-muted: #6b6b65;
+  --text-faint: #97978f;
+
+  /* Accent is used once per screen, on the primary action. */
+  --accent: #2f6f4e;
+  --accent-hover: #275c41;
+  --accent-text: #ffffff;
+  --accent-subtle: #eaf2ed;
+
+  /* State. Running costs money, so it is the loudest thing on the page. */
+  --running: #2f6f4e;
+  --running-bg: #eaf2ed;
+  --stopped: #6b6b65;
+  --stopped-bg: #f2f2f0;
+  --pending: #8a6d1f;
+  --pending-bg: #faf3e0;
+  --danger: #a33a2e;
+  --danger-bg: #fbeceb;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-8: 3rem;
+
+  --radius: 8px;
+  --radius-lg: 12px;
+
+  --font: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.75rem;
+  --text-2xl: 2.5rem;
+
+  --shadow: 0 1px 2px rgb(0 0 0 / 6%), 0 4px 12px rgb(0 0 0 / 4%);
+  --focus: 0 0 0 3px var(--accent-subtle), 0 0 0 1px var(--accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1a1a18;
+    --bg-raised: #232320;
+    --bg-sunken: #141412;
+    --border: #333330;
+    --border-strong: #4a4a45;
+    --text: #eeeeea;
+    --text-muted: #a3a39b;
+    --text-faint: #7a7a72;
+
+    --accent: #6aa886;
+    --accent-hover: #7cb996;
+    --accent-text: #10201a;
+    --accent-subtle: #23332b;
+
+    --running: #6aa886;
+    --running-bg: #1e2b24;
+    --stopped: #a3a39b;
+    --stopped-bg: #262623;
+    --pending: #cfa94a;
+    --pending-bg: #2e2718;
+    --danger: #e08b7f;
+    --danger-bg: #2e1d1b;
+
+    --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 4px 12px rgb(0 0 0 / 20%);
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: var(--text-base);
+  line-height: 1.55;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* One visible focus treatment everywhere, so keyboard use is never guesswork. */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+  border-radius: var(--radius);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+h1, h2, h3 { margin: 0; font-weight: 600; line-height: 1.25; }
+h1 { font-size: var(--text-xl); }
+h2 { font-size: var(--text-lg); }
+h3 { font-size: var(--text-base); }
+p { margin: 0; }
+
+code, kbd { font-family: var(--font-mono); font-size: 0.9em; }

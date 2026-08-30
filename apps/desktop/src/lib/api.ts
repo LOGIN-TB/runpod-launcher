@@ -1,0 +1,135 @@
+import type { Problem, PublicSettings, Template } from '@runpod-launcher/shared'
+
+/**
+ * Talks to the launcher service.
+ *
+ * The device token lives in the browser's local storage during development and
+ * in the OS keychain once the Tauri shell wraps this; either way it is set once
+ * at pairing and never typed again.
+ */
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
+export interface Connection {
+  baseUrl: string
+  token: string
+}
+
+async function request<T>(connection: Connection, path: string, init: RequestInit = {}): Promise<T> {
+  let response: Response
+  try {
+    response = await fetch(new URL(path, connection.baseUrl), {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${connection.token}`,
+        ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+        ...init.headers,
+      },
+    })
+  } catch (cause) {
+    // A network-level failure is the common case when the container is down,
+    // and it deserves a different message from a rejection by the service.
+    throw new ApiError(0, (cause as Error).message)
+  }
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new ApiError(response.status, body.error ?? `${response.status} ${response.statusText}`)
+  }
+  return response.status === 204 ? (undefined as T) : ((await response.json()) as T)
+}
+
+export interface PodView {
+  pod: { id: string; templateId: string; status: string; costPerHour: number } | null
+  serving: { chatUrl: string | null; embeddingUrl: string | null; servedModels: string[] } | null
+}
+
+export interface GpuType {
+  id: string
+  name: string
+  memory: number
+  price: { secure?: number; community?: number }
+  availability?: 'HIGH' | 'MEDIUM' | 'LOW' | string
+}
+
+export interface ModelHit {
+  repoId: string
+  downloads: number
+  pipelineTag: string | null
+  gated: boolean
+}
+
+export interface ModelVerdict {
+  details: {
+    repoId: string
+    weightBytes: number
+    format: string
+    gated: boolean
+    ggufVariants?: Array<{ label: string; bytes: number; files: string[] }>
+  }
+  compatible: boolean
+  problems: Problem[]
+  headroomGib: number | null
+}
+
+export interface ClientToken {
+  id: string
+  name: string
+  createdAt: string
+  lastUsedAt: string | null
+  revokedAt: string | null
+}
+
+export const api = {
+  /** Exchanges a pairing code for a device token. Needs no token itself. */
+  async pair(baseUrl: string, code: string, deviceName: string): Promise<{ token: string; deviceId: string }> {
+    const response = await fetch(new URL('/pair', baseUrl), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, deviceName }),
+    })
+    const body = (await response.json().catch(() => ({}))) as { token?: string; deviceId?: string; error?: string }
+    if (!response.ok || !body.token) throw new ApiError(response.status, body.error ?? 'Pairing failed')
+    return { token: body.token, deviceId: body.deviceId ?? '' }
+  },
+
+  health: (baseUrl: string) => fetch(new URL('/health', baseUrl)).then((r) => r.json()),
+
+  settings: (c: Connection) => request<PublicSettings>(c, '/settings'),
+  saveSettings: (c: Connection, patch: Record<string, unknown>) =>
+    request<PublicSettings>(c, '/settings', { method: 'PATCH', body: JSON.stringify(patch) }),
+  verifyRunpodKey: (c: Connection) =>
+    request<{ valid: boolean; error?: string }>(c, '/settings/verify-runpod', { method: 'POST' }),
+
+  templates: (c: Connection) => request<{ templates: Template[] }>(c, '/templates'),
+  createTemplate: (c: Connection, template: Record<string, unknown>) =>
+    request<Template>(c, '/templates', { method: 'POST', body: JSON.stringify(template) }),
+
+  pod: (c: Connection) => request<PodView>(c, '/pod'),
+  startPod: (c: Connection, templateId: string) =>
+    request<{ id: string }>(c, '/pod/start', { method: 'POST', body: JSON.stringify({ templateId }) }),
+  stopPod: (c: Connection) => request<{ stopped: string | null }>(c, '/pod/stop', { method: 'POST', body: '{}' }),
+
+  gpus: (c: Connection) => request<{ gpus: GpuType[] }>(c, '/catalog/gpus'),
+
+  searchModels: (c: Connection, q: string, kind: 'chat' | 'embedding') =>
+    request<{ models: ModelHit[] }>(c, `/models/search?q=${encodeURIComponent(q)}&kind=${kind}`),
+  evaluateModel: (c: Connection, body: Record<string, unknown>) =>
+    request<ModelVerdict>(c, '/models/evaluate', { method: 'POST', body: JSON.stringify(body) }),
+
+  clientTokens: (c: Connection) => request<{ tokens: ClientToken[] }>(c, '/client-tokens'),
+  createClientToken: (c: Connection, name: string) =>
+    request<{ id: string; token: string }>(c, '/client-tokens', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  revokeClientToken: (c: Connection, id: string) =>
+    request<void>(c, `/client-tokens/${id}`, { method: 'DELETE' }),
+}

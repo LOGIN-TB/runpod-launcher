@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "packages/shared" },
+    { "path": "packages/i18n" },
     { "path": "apps/service" }
   ]
 }

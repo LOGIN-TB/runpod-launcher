@@ -1,0 +1,128 @@
+import type { Messages } from './index.js'
+
+/**
+ * German. Typed against the English reference, so a missing or misspelled key
+ * is a build error rather than a blank label.
+ *
+ * Deliberately plain: no marketing register, "du" throughout, and numbers
+ * formatted the German way at the call site rather than baked into strings.
+ */
+export const de = {
+  'app.name': 'RunPod Launcher',
+  'app.tagline': 'Dein eigenes Modell auf gemieteter Hardware',
+
+  'nav.overview': 'Übersicht',
+  'nav.templates': 'Vorlagen',
+  'nav.clients': 'Zugänge',
+  'nav.settings': 'Einstellungen',
+  'nav.help': 'Hilfe',
+
+  'action.save': 'Speichern',
+  'action.cancel': 'Abbrechen',
+  'action.delete': 'Löschen',
+  'action.retry': 'Nochmal versuchen',
+  'action.copy': 'Kopieren',
+  'action.copied': 'Kopiert',
+  'action.close': 'Schließen',
+
+  'pairing.title': 'Mit deinem Dienst verbinden',
+  'pairing.intro':
+    'Der Launcher-Dienst läuft neben dem, was dein Modell nutzt. Trag seine Adresse ein und den Kopplungscode, den er beim ersten Start ausgegeben hat.',
+  'pairing.address': 'Adresse des Dienstes',
+  'pairing.addressHint': 'Zum Beispiel http://192.168.1.20:8080 oder https://launcher.example.com',
+  'pairing.code': 'Kopplungscode',
+  'pairing.codeHint': 'Steht im Container-Log, bei Coolify unter den Umgebungsvariablen',
+  'pairing.deviceName': 'Name für dieses Gerät',
+  'pairing.submit': 'Koppeln',
+  'pairing.failed': 'Kopplung fehlgeschlagen: {reason}',
+  'pairing.noService': 'Unter dieser Adresse antwortet nichts. Läuft der Container?',
+
+  'pod.title': 'Modell',
+  'pod.start': 'Starten',
+  'pod.stop': 'Stoppen',
+  'pod.starting': 'Startet — das dauert ein paar Minuten',
+  'pod.running': 'Läuft',
+  'pod.stopped': 'Gestoppt',
+  'pod.none': 'Noch kein Pod',
+  'pod.noneHint': 'Wähl eine Vorlage und starte sie. Vorher kostet nichts.',
+  'pod.costToday': 'Heute',
+  'pod.costPerHour': '{amount} pro Stunde',
+  'pod.uptime': 'Läuft seit {duration}',
+  'pod.endpoint': 'Adresse für deine Clients',
+
+  'template.title': 'Vorlagen',
+  'template.none': 'Noch keine Vorlagen',
+  'template.noneHint': 'Eine Vorlage legt fest, was läuft: Modell, Grafikkarte und wann geschlafen wird.',
+  'template.new': 'Neue Vorlage',
+  'template.name': 'Name',
+  'template.chatModel': 'Chat-Modell',
+  'template.embeddingModel': 'Embedding-Modell',
+  'template.slotOff': 'Nicht genutzt',
+  'template.slotOn': 'Genutzt',
+  'template.gpu': 'Grafikkarte',
+  'template.advanced': 'Erweitert',
+  'template.contextLength': 'Kontextlänge',
+  'template.sleepMode': 'Im Leerlauf',
+  'template.sleepStopResume': 'Anhalten und fortsetzen',
+  'template.sleepStopResumeHint':
+    'Behält die Maschine, ist also in ein bis zwei Minuten wieder da. Der Speicher kostet währenddessen den doppelten Satz.',
+  'template.sleepRecreate': 'Jedes Mal neu bauen',
+  'template.sleepRecreateHint':
+    'Günstiger im Ruhezustand, bindet den Pod aber an ein Rechenzentrum — dort, wo freie Karten am knappsten sind.',
+
+  'model.search': 'Bei HuggingFace suchen',
+  'model.searchHint': 'Oder eine Repo-Kennung einfügen, etwa Qwen/Qwen3.8-27B-FP8',
+  'model.checking': 'Wird geprüft…',
+  'model.fits': 'Passt: {weights} Gewichte, etwa {headroom} bleiben für den Kontext',
+  'model.wontFit': 'Funktioniert hier nicht',
+  'model.downloads': '{count} Downloads',
+  'model.gguf.pick': 'Quantisierung',
+
+  'clients.title': 'Zugänge',
+  'clients.intro':
+    'Jeder Client bekommt einen eigenen Token. Ein Client-Token darf das Modell benutzen und sonst nichts — er kann keinen Pod starten und keine Einstellungen lesen.',
+  'clients.new': 'Neuer Token',
+  'clients.name': 'Wofür ist der?',
+  'clients.namePlaceholder': 'n8n, mein Agent, ein Skript…',
+  'clients.created': 'Jetzt kopieren. Er wird nie wieder angezeigt.',
+  'clients.lastUsed': 'Zuletzt genutzt {when}',
+  'clients.neverUsed': 'Nie genutzt',
+  'clients.revoke': 'Sperren',
+  'clients.revoked': 'Gesperrt',
+  'clients.recipe': 'So verbindest du dich',
+
+  'settings.title': 'Einstellungen',
+  'settings.runpodKey': 'RunPod-API-Schlüssel',
+  'settings.runpodKeyHint': 'Nötig, um Hardware zu mieten. Wird verschlüsselt gespeichert und nie wieder angezeigt.',
+  'settings.hfToken': 'HuggingFace-Token',
+  'settings.hfTokenHint': 'Optional. Beschleunigt Downloads und öffnet zugangsbeschränkte Modelle.',
+  'settings.webhook': 'Webhook für Meldungen',
+  'settings.webhookHint': 'Wohin Warnungen gehen — ein n8n-Webhook oder alles, was POST annimmt.',
+  'settings.set': 'Gesetzt',
+  'settings.notSet': 'Nicht gesetzt',
+  'settings.replace': 'Ersetzen',
+  'settings.verify': 'Schlüssel prüfen',
+  'settings.verified': 'Der Schlüssel funktioniert',
+  'settings.verifyFailed': 'RunPod hat diesen Schlüssel abgelehnt',
+  'settings.language': 'Sprache',
+  'settings.spendLimits': 'Ausgabengrenzen',
+  'settings.dailyLimit': 'Stopp bei, pro Tag',
+  'settings.monthlyLimit': 'Stopp bei, pro Monat',
+
+  'problem.format-engine-mismatch':
+    '{format}-Gewichte kann {engine} nicht laden. Gelesen werden {supported}.',
+  'problem.fp8-unsupported-gpu':
+    'Die {gpu} kann FP8 nicht in Hardware. Sie liefe hier langsamer als eine 4-Bit-Fassung.',
+  'problem.does-not-fit': '{weightsGib} GiB Gewichte lassen auf einer {cardGib}-GiB-Karte keinen Platz.',
+  'problem.does-not-fit-with-other':
+    '{weightsGib} GiB Gewichte lassen auf einer {cardGib}-GiB-Karte keinen Platz, neben den {otherGib} GiB des anderen Modells.',
+  'problem.tight-headroom':
+    'Es blieben nur {headroomGib} GiB für den Kontext. Rechne mit einem sehr kurzen Kontextfenster.',
+  'problem.repo-gated':
+    '{repoId} ist zugangsbeschränkt. Stimm den Bedingungen bei HuggingFace zu und trag in den Einstellungen einen Token mit Zugriff ein.',
+  'problem.repo-missing': 'Kein Repository namens {repoId}, oder diese Revision gibt es nicht.',
+  'problem.hub-error': 'HuggingFace hat mit {status} geantwortet.',
+
+  'error.generic': 'Da ist etwas schiefgegangen: {message}',
+  'error.offline': 'Der Dienst ist nicht erreichbar.',
+} satisfies Messages

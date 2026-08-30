@@ -1,5 +1,5 @@
-import type { Engine, WeightFormat } from '@runpod-launcher/shared'
-import { checkCompatibility } from '@runpod-launcher/shared'
+import type { Engine, Problem, WeightFormat } from '@runpod-launcher/shared'
+import { checkCompatibility, problem } from '@runpod-launcher/shared'
 
 const API = 'https://huggingface.co/api'
 
@@ -38,13 +38,14 @@ export interface ModelDetails {
   /** True when the repo requires accepting terms before download. */
   gated: boolean
   /** Set when we could not read the config — the repo may be gated or private. */
-  inaccessible: string | null
+  inaccessible: Problem | null
 }
 
 export interface ModelVerdict {
   details: ModelDetails
   compatible: boolean
-  problems: string[]
+  /** Reasons as codes plus values; the app phrases them in the user's language. */
+  problems: Problem[]
   /** VRAM left for the KV cache after weights and the other slot, in GiB. */
   headroomGib: number | null
 }
@@ -114,10 +115,10 @@ export class HuggingFaceClient {
     if (!response.ok) {
       const reason =
         response.status === 401 || response.status === 403
-          ? 'This repository is gated. Accept its terms on HuggingFace and add a token with access in Settings.'
+          ? problem('repo-gated', { repoId })
           : response.status === 404
-            ? 'No such repository, or the revision does not exist.'
-            : `HuggingFace returned ${response.status}.`
+            ? problem('repo-missing', { repoId })
+            : problem('hub-error', { status: response.status })
       return { repoId, weightBytes: 0, format: 'unknown', gated: response.status === 403, inaccessible: reason }
     }
 
@@ -166,7 +167,7 @@ export class HuggingFaceClient {
     gpuMemoryUtilization?: number
   }): Promise<ModelVerdict> {
     const details = await this.inspect(args.repoId, args.revision)
-    const problems: string[] = []
+    const problems: Problem[] = []
 
     if (details.inaccessible) {
       return { details, compatible: false, problems: [details.inaccessible], headroomGib: null }
@@ -177,7 +178,7 @@ export class HuggingFaceClient {
       format: details.format,
       gpuDisplayName: args.gpuDisplayName,
     })
-    if (!verdict.ok) problems.push(verdict.detail)
+    if (!verdict.ok) problems.push(verdict.problem)
 
     const weightsGib = bytesToGib(details.weightBytes)
     const otherGib = bytesToGib(args.otherSlotBytes ?? 0)
@@ -190,13 +191,14 @@ export class HuggingFaceClient {
 
     if (headroomGib <= 0) {
       problems.push(
-        `${weightsGib.toFixed(1)} GiB of weights leave no room on a ${args.gpuMemoryGb} GiB card` +
-          (otherGib > 0 ? ` alongside the other model's ${otherGib.toFixed(1)} GiB.` : '.'),
+        problem('does-not-fit', {
+          weightsGib: round1(weightsGib),
+          cardGib: args.gpuMemoryGb,
+          otherGib: round1(otherGib),
+        }),
       )
     } else if (headroomGib < 4) {
-      problems.push(
-        `Only ${headroomGib.toFixed(1)} GiB would be left for context. Expect a very short context window.`,
-      )
+      problems.push(problem('tight-headroom', { headroomGib: round1(headroomGib) }))
     }
 
     return { details, compatible: problems.length === 0, problems, headroomGib }
@@ -204,6 +206,8 @@ export class HuggingFaceClient {
 }
 
 const BYTES_PER_GIB = 1024 ** 3
+
+const round1 = (value: number): number => Math.round(value * 10) / 10
 
 /** HuggingFace reports file sizes in decimal bytes; GPUs and vLLM talk in GiB. */
 export const bytesToGib = (bytes: number): number => bytes / BYTES_PER_GIB

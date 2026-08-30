@@ -36,6 +36,23 @@ const pods = new PodManager(db, requireRunpodKey, () => settings.secret('hugging
 const pairing = new PairingService(db, tokens, config.pairingCode ?? generatePairingCode())
 const huggingface = new HuggingFaceClient(() => settings.secret('huggingfaceToken'))
 
+/**
+ * Lets the UI's dev server talk to the service.
+ *
+ * Only in development: the built app is served from the same origin (or from
+ * Tauri's own scheme), so production never needs this. Origins the gateway
+ * accepts are configured separately, in settings.
+ */
+if (process.env.ALLOW_UI_ORIGIN) {
+  const allowed = process.env.ALLOW_UI_ORIGIN
+  app.addHook('onSend', async (request, reply) => {
+    reply.header('access-control-allow-origin', allowed)
+    reply.header('access-control-allow-headers', 'authorization, content-type')
+    reply.header('access-control-allow-methods', 'GET, POST, PATCH, DELETE, OPTIONS')
+  })
+  app.options('/*', async (_request, reply) => reply.code(204).send())
+}
+
 app.get('/health', async () => ({
   status: 'ok',
   paired: pairing.hasPairedDevice(),

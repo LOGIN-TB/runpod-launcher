@@ -1,3 +1,5 @@
+import { problem, type Problem } from './problems.js'
+
 /**
  * Inference engines we can start inside a pod, and the model weight formats
  * each one can actually load.
@@ -33,9 +35,7 @@ export function gpuSupportsFp8(gpuDisplayName: string): boolean {
   return FP8_CAPABLE.test(gpuDisplayName)
 }
 
-export type CompatibilityVerdict =
-  | { ok: true }
-  | { ok: false; reason: 'format-engine-mismatch' | 'fp8-unsupported-gpu'; detail: string }
+export type CompatibilityVerdict = { ok: true } | { ok: false; problem: Problem }
 
 /** Checks a model's weight format against the chosen engine and GPU. */
 export function checkCompatibility(args: {
@@ -48,17 +48,16 @@ export function checkCompatibility(args: {
   if (format !== 'unknown' && !ENGINE_FORMATS[engine].includes(format)) {
     return {
       ok: false,
-      reason: 'format-engine-mismatch',
-      detail: `${format.toUpperCase()} weights cannot be served by ${engine}. Supported: ${ENGINE_FORMATS[engine].join(', ')}.`,
+      problem: problem('format-engine-mismatch', {
+        format: format.toUpperCase(),
+        engine,
+        supported: ENGINE_FORMATS[engine].join(', ').toUpperCase(),
+      }),
     }
   }
 
   if (format === 'fp8' && !gpuSupportsFp8(gpuDisplayName)) {
-    return {
-      ok: false,
-      reason: 'fp8-unsupported-gpu',
-      detail: `${gpuDisplayName} has no hardware FP8. Expect it to run slower than AWQ or GPTQ on this card.`,
-    }
+    return { ok: false, problem: problem('fp8-unsupported-gpu', { gpu: gpuDisplayName }) }
   }
 
   return { ok: true }

@@ -50,7 +50,7 @@ test('FP8 weights are rejected on a card without hardware FP8', async () => {
     gpuMemoryGb: 48,
   })
   assert.equal(verdict.compatible, false)
-  assert.match(verdict.problems.join(' '), /no hardware FP8/)
+  assert.deepEqual(verdict.problems.map((p) => p.code), ['fp8-unsupported-gpu'])
 })
 
 test('GGUF weights are rejected for vLLM, with the reason spelled out', async () => {
@@ -64,7 +64,7 @@ test('GGUF weights are rejected for vLLM, with the reason spelled out', async ()
     gpuMemoryGb: 48,
   })
   assert.equal(verdict.compatible, false)
-  assert.match(verdict.problems.join(' '), /GGUF weights cannot be served by vllm/)
+  assert.deepEqual(verdict.problems.map((p) => p.code), ['format-engine-mismatch'])
 })
 
 test('FP8 does not fit on a 32 GB card, but INT4 does — the measured case', async () => {
@@ -76,7 +76,7 @@ test('FP8 does not fit on a 32 GB card, but INT4 does — the measured case', as
     gpuMemoryGb: 32,
   })
   assert.equal(fp8.compatible, false)
-  assert.match(fp8.problems.join(' '), /leave no room on a 32 GiB card/)
+  assert.deepEqual(fp8.problems.map((p) => p.code), ['does-not-fit'])
 
   const int4 = await client(INT4_REPO).evaluate({
     repoId: 'RedHatAI/Qwen3.8-27B-INT4',
@@ -100,7 +100,7 @@ test('a second model on the card is counted against the headroom', async () => {
     otherSlotBytes: 8_000_000_000,
   })
   assert.equal(verdict.compatible, false)
-  assert.match(verdict.problems.join(' '), /left for context|leave no room/)
+  assert.ok(verdict.problems.some((p) => p.code === 'does-not-fit' || p.code === 'tight-headroom'))
 })
 
 test('a gated repository says so instead of failing later on the pod', async () => {
@@ -112,7 +112,7 @@ test('a gated repository says so instead of failing later on the pod', async () 
     gpuMemoryGb: 48,
   })
   assert.equal(verdict.compatible, false)
-  assert.match(verdict.problems.join(' '), /gated.*Accept its terms/)
+  assert.deepEqual(verdict.problems.map((p) => p.code), ['repo-gated'])
 })
 
 test('every RunPod card name is classified correctly for FP8', () => {

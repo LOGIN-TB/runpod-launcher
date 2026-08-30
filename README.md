@@ -113,8 +113,20 @@ pod that bills for storage and serves nothing.
 npm install
 npm test
 npm run build
-DATA_DIR=./data PORT=8080 node apps/service/dist/index.js
+
+# the service
+DATA_DIR=./data PORT=8080 ALLOW_UI_ORIGIN=http://localhost:5173 node apps/service/dist/index.js
+
+# the interface, in another terminal
+npm run dev -w @runpod-launcher/desktop
 ```
+
+`ALLOW_UI_ORIGIN` is development only: the built app is served from the same
+origin, so production never needs it.
+
+The Tauri wrapper is not built yet — it needs a Rust toolchain (`rustup`). The
+interface is finished and runs in any browser meanwhile; wrapping it changes no
+application code.
 
 `npm run gen:runpod` regenerates the RunPod API types from
 `https://api.runpod.io/v2/openapi.json`. They are generated rather than
@@ -128,8 +140,10 @@ is the source of truth for paths and payloads.
 - [x] OpenAI-compatible gateway with streaming and OpenAI-shaped errors
 - [x] Pod image running one or two vLLM servers on a single GPU
 - [ ] Walking skeleton: a real answer from a real pod, measured
-- [ ] Desktop app (Tauri), template editor, HuggingFace model picker
-- [ ] In-app help with generated screenshots, German and English
+- [x] German and English throughout, including the service's own messages
+- [x] App UI: pairing, overview, template editor with model picker, client tokens, settings
+- [ ] Tauri shell (needs `rustup`; the UI itself is done and runs in a browser)
+- [ ] In-app help with generated screenshots
 - [ ] Scheduler, idle shutdown, wake-on-request, spend limits
 
 ## Licence
