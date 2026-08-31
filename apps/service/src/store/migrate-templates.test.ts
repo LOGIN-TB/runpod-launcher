@@ -56,3 +56,61 @@ test('an already-correct llama.cpp template is not touched', () => {
   migrateTemplates(db, () => {})
   assert.equal(read(db).maxConcurrentSequences, 8, 'a deliberate choice above the default is kept')
 })
+
+test('a vLLM template written before tool support can express it afterwards', () => {
+  // Seen live: the pod started, and the agent's first message came back as
+  // HTTP 400 `"auto" tool choice requires --enable-auto-tool-choice and
+  // --tool-call-parser to be set`. The template stored the argument string it
+  // was created with, so it had no way to pass either flag.
+  const db = openDatabase(':memory:')
+  const stale = templateSchema.parse({
+    id: 't1',
+    name: 'QwenVllm',
+    engine: 'vllm',
+    image: VLLM_PRESET.image,
+    gpuTypeId: 'NVIDIA L40S',
+    chatModel: { repoId: 'Qwen/Qwen3.8-27B-FP8' },
+    lifecycleMode: 'stopResume',
+    // The preset as it read before the parser flags existed.
+    args:
+      '{{chatModel}} --port 8000 --host 0.0.0.0 --api-key {{apiKey}}' +
+      ' --max-model-len {{maxModelLen}} --gpu-memory-utilization {{chatGpuFraction}}' +
+      ' --max-num-seqs {{maxConcurrentSequences}}',
+  })
+  const now = new Date().toISOString()
+  db.prepare('INSERT INTO templates (id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+    .run(stale.id, stale.name, JSON.stringify(stale), now, now)
+
+  const notes: string[] = []
+  migrateTemplates(db, (message) => notes.push(message))
+
+  const after = templateSchema.parse(
+    JSON.parse((db.prepare('SELECT config FROM templates WHERE id = ?').get('t1') as { config: string }).config),
+  )
+  assert.match(after.args ?? '', /\{\{toolFlags\}\}/)
+  assert.match(after.args ?? '', /\{\{reasoningFlags\}\}/)
+  assert.equal(notes.length, 1)
+  assert.match(notes[0]!, /pick its chat model again/)
+})
+
+test('a vLLM template that already carries the flags is left alone', () => {
+  const db = openDatabase(':memory:')
+  const current = templateSchema.parse({
+    id: 't1',
+    name: 'fine',
+    engine: 'vllm',
+    image: VLLM_PRESET.image,
+    gpuTypeId: 'NVIDIA L40S',
+    chatModel: { repoId: 'Qwen/Qwen3.8-27B-FP8' },
+    lifecycleMode: 'stopResume',
+    args: VLLM_PRESET.chatArgs,
+    toolCallParser: 'qwen3_xml',
+  })
+  const now = new Date().toISOString()
+  db.prepare('INSERT INTO templates (id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+    .run(current.id, current.name, JSON.stringify(current), now, now)
+
+  const notes: string[] = []
+  migrateTemplates(db, (message) => notes.push(message))
+  assert.deepEqual(notes, [], 'nothing to repair, so nothing is said')
+})

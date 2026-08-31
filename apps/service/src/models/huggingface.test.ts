@@ -8,6 +8,9 @@ import {
   pickDefaultGgufVariant,
 } from './huggingface.js'
 
+const json = (payload: unknown): Response =>
+  new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } })
+
 test('the weight format comes from metadata first, then the name', () => {
   assert.equal(detectFormat('someone/model', ['model-00001.gguf']), 'gguf')
   assert.equal(detectFormat('x/y', ['a.safetensors'], { quant_method: 'awq' }), 'awq')
@@ -282,4 +285,46 @@ test('the chosen variant is what gets sized, not the default', async () => {
   })
   assert.equal(verdict.details.weightBytes, 15_300_000_000)
   assert.equal(verdict.compatible, true)
+})
+
+test("the model's own context limit is found even when it hides under text_config", async () => {
+  // `Qwen/Qwen3.8-27B-FP8` reports nothing at the top level and 262144 under
+  // `text_config`, because it is multimodal. Reading only the top level would
+  // find no limit, drop this ceiling entirely, and let a template ask for a
+  // window the engine refuses — a refusal that arrives after the weights have
+  // finished downloading.
+  const client = new HuggingFaceClient(
+    () => null,
+    (async (url: unknown) => {
+      const target = String(url)
+      if (target.includes('/api/models/')) {
+        return json({ siblings: [{ rfilename: 'model.safetensors', size: 1000 }] })
+      }
+      if (target.endsWith('/config.json')) {
+        return json({ model_type: 'qwen3_5', text_config: { max_position_embeddings: 262144 } })
+      }
+      if (target.endsWith('/tokenizer_config.json')) return json({})
+      return json({})
+    }) as unknown as typeof fetch,
+  )
+
+  const details = await client.inspect('Qwen/Qwen3.8-27B-FP8')
+  assert.equal(details.nativeContextTokens, 262144)
+})
+
+test('a repository that hides its config leaves the ceiling unknown, not zero', async () => {
+  // Unknown must stay unknown: treating a missing file as a limit of zero would
+  // make every such model unselectable.
+  const client = new HuggingFaceClient(
+    () => null,
+    (async (url: unknown) => {
+      if (String(url).includes('/api/models/')) {
+        return json({ siblings: [{ rfilename: 'model.safetensors', size: 1000 }] })
+      }
+      return new Response('not found', { status: 404 })
+    }) as unknown as typeof fetch,
+  )
+
+  const details = await client.inspect('some/model')
+  assert.equal(details.nativeContextTokens, null)
 })

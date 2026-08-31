@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { POD_PORTS, type ModelSlot, type Template, type runpod } from '@runpod-launcher/shared'
 
 /**
@@ -119,8 +120,41 @@ export function renderArgs(args: string, context: {
     chatGpuFraction: vram.chat === null ? '' : String(vram.chat),
     embeddingGpuFraction: vram.embedding === null ? '' : String(vram.embedding),
     mountPath: template.networkVolumeMountPath,
+    /**
+     * Whole flags rather than bare values, so a template without a parser
+     * renders no flag at all — `--tool-call-parser` with an empty argument
+     * would swallow the next flag and fail the start with something obscure.
+     */
+    toolFlags: template.toolCallParser
+      ? `--enable-auto-tool-choice --tool-call-parser ${template.toolCallParser}`
+      : '',
+    reasoningFlags: template.reasoningParser
+      ? `--reasoning-parser ${template.reasoningParser}`
+      : '',
   }
-  return args.replace(/\{\{(\w+)\}\}/g, (whole, key: string) => values[key] ?? whole)
+  return args
+    .replace(/\{\{(\w+)\}\}/g, (whole, key: string) => values[key] ?? whole)
+    // An unset flag leaves a gap behind. Harmless to the shell, but it makes
+    // the rendered command unreadable in the logs and in the pod's own listing.
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+/**
+ * A stable summary of what a template would start the engine with.
+ *
+ * The pod's own bearer token is deliberately excluded: it differs between an
+ * old pod and a new one by design, and including it would report every pod as
+ * out of date.
+ */
+export function argsFingerprint(template: Template): string {
+  if (!template.args) return ''
+  const rendered = renderArgs(template.args, {
+    template,
+    vram: planVramSplit(template),
+    podApiKey: '<key>',
+  })
+  return createHash('sha256').update(rendered).digest('hex').slice(0, 16)
 }
 
 /** Turns a template into the exact body RunPod's createPod expects. */

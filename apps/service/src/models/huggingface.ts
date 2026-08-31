@@ -5,6 +5,8 @@ import {
   engineForFormat,
   estimateKvHeadroomGib,
   problem,
+  reasoningParserFor,
+  toolCallParserFor,
   UNUSABLE_FORMATS,
 } from '@runpod-launcher/shared'
 
@@ -56,6 +58,23 @@ export interface ModelDetails {
   gated: boolean
   /** Set when we could not read the config — the repo may be gated or private. */
   inaccessible: Problem | null
+  /**
+   * vLLM parsers this model needs, read from its own chat template.
+   *
+   * Absent for a GGUF repository: llama.cpp reads the template out of the file
+   * itself and needs no such flags.
+   */
+  toolCallParser?: string | null
+  reasoningParser?: string | null
+  /**
+   * The longest context the model itself supports, in tokens.
+   *
+   * A second ceiling next to the card's memory, and the lower of the two wins.
+   * vLLM refuses to start at all when asked for more than the model can do, so
+   * without this a template can promise a window that costs ten minutes of
+   * download to discover is impossible.
+   */
+  nativeContextTokens?: number | null
 }
 
 export interface ModelVerdict {
@@ -197,6 +216,13 @@ export class HuggingFaceClient {
       }
     }
 
+    // The chat template says which tool-call format this model emits, which is
+    // what decides the parser. Fetched separately because the model listing
+    // does not carry it, and failing to read it is not fatal — the fields just
+    // stay unset and the user can fill them in.
+    const chatTemplate = await this.chatTemplate(repoId, revision)
+    const nativeContextTokens = await this.nativeContext(repoId, revision)
+
     return {
       repoId,
       weightBytes: files
@@ -205,6 +231,56 @@ export class HuggingFaceClient {
       format,
       gated: Boolean(info.gated),
       inaccessible: null,
+      toolCallParser: toolCallParserFor(chatTemplate),
+      reasoningParser: reasoningParserFor(chatTemplate),
+      nativeContextTokens,
+    }
+  }
+
+  /**
+   * The model's own context limit, or null when it cannot be read.
+   *
+   * Multimodal repositories keep it under `text_config` rather than at the top
+   * level — `Qwen3.8-27B` reports nothing at the top and 262144 underneath, so
+   * reading only the top level would find no limit at all and silently drop
+   * this ceiling.
+   */
+  private async nativeContext(repoId: string, revision?: string): Promise<number | null> {
+    const config = await this.rawJson<{
+      max_position_embeddings?: unknown
+      text_config?: { max_position_embeddings?: unknown }
+    }>(repoId, 'config.json', revision)
+    if (!config) return null
+
+    const candidates = [config.max_position_embeddings, config.text_config?.max_position_embeddings]
+    const found = candidates.find((value) => typeof value === 'number' && value > 0)
+    return typeof found === 'number' ? found : null
+  }
+
+  /** The repository's Jinja chat template, or null when it cannot be read. */
+  private async chatTemplate(repoId: string, revision?: string): Promise<string | null> {
+    const config = await this.rawJson<{ chat_template?: unknown }>(repoId, 'tokenizer_config.json', revision)
+    return typeof config?.chat_template === 'string' ? config.chat_template : null
+  }
+
+  /**
+   * One JSON file straight out of the repository.
+   *
+   * Failure is never fatal here: these files add detail the launcher can do
+   * without, and a repository that hides them should not make a model
+   * unselectable.
+   */
+  private async rawJson<T>(repoId: string, file: string, revision?: string): Promise<T | null> {
+    const ref = encodeURIComponent(revision ?? 'main')
+    try {
+      const response = await this.fetchImpl(
+        `https://huggingface.co/${repoId}/raw/${ref}/${file}`,
+        { headers: this.headers() },
+      )
+      if (!response.ok) return null
+      return (await response.json()) as T
+    } catch {
+      return null
     }
   }
 

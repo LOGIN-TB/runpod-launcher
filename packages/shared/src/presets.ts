@@ -31,10 +31,14 @@ export const VLLM_PRESET: EnginePreset = {
   defaultConcurrency: 64,
   // Pinned deliberately: `latest` has broken freshly released architectures.
   image: 'vllm/vllm-openai:v0.28.0',
+  // The parser flags render to nothing when the template names no parser, so a
+  // model without tools starts exactly as before. With `tool_choice: "auto"`
+  // and no parser, vLLM does not degrade — it rejects the request outright.
   chatArgs:
     '{{chatModel}} --port 8000 --host 0.0.0.0 --api-key {{apiKey}}' +
     ' --max-model-len {{maxModelLen}} --gpu-memory-utilization {{chatGpuFraction}}' +
-    ' --max-num-seqs {{maxConcurrentSequences}}',
+    ' --max-num-seqs {{maxConcurrentSequences}}' +
+    ' {{toolFlags}} {{reasoningFlags}}',
   embeddingArgs:
     '{{embeddingModel}} --port 8001 --host 0.0.0.0 --api-key {{apiKey}}' +
     ' --gpu-memory-utilization {{embeddingGpuFraction}}',

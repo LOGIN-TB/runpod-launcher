@@ -65,6 +65,22 @@ export const templateSchema = z
     image: z.string().min(1),
 
     chatModel: modelSlotSchema.nullable().default(null),
+    /**
+     * vLLM's `--tool-call-parser`, or null to start without tool support.
+     *
+     * Needed because vLLM refuses `tool_choice: "auto"` outright unless a
+     * parser is named, and the right one depends on the format the model emits
+     * rather than on its family. Detected from the model's chat template when
+     * one is picked, and editable for the cases detection gets wrong.
+     */
+    toolCallParser: z.string().nullable().default(null),
+    /**
+     * vLLM's `--reasoning-parser`, or null.
+     *
+     * Without it a thinking model's deliberation arrives inside the answer
+     * text, which the client then reads out as the answer.
+     */
+    reasoningParser: z.string().nullable().default(null),
     embeddingModel: modelSlotSchema.nullable().default(null),
 
     gpuTypeId: z.string().min(1),

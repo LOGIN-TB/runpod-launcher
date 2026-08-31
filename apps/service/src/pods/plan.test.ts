@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { templateSchema, type Template } from '@runpod-launcher/shared'
-import { buildCreatePodRequest, planVramSplit } from './plan.js'
+import { templateSchema, VLLM_PRESET, type Template } from '@runpod-launcher/shared'
+import { buildCreatePodRequest, planVramSplit, renderArgs } from './plan.js'
 
 const base = {
   id: 't1',
@@ -177,4 +177,42 @@ test('vLLM keeps the per-request figure, because its budget is not shared', () =
     huggingfaceToken: null,
   })
   assert.equal(request.args, '--max-model-len 16384 --max-num-seqs 64')
+})
+
+test('vLLM is told which tool-call parser to use, and told nothing when there is none', () => {
+  // vLLM refuses `tool_choice: "auto"` outright without these two flags — seen
+  // live: `"auto" tool choice requires --enable-auto-tool-choice and
+  // --tool-call-parser to be set`, HTTP 400, on the agent's first message.
+  const withParsers = templateSchema.parse({
+    id: 't1',
+    name: 'qwen',
+    image: VLLM_PRESET.image,
+    gpuTypeId: 'NVIDIA L40S',
+    chatModel: { repoId: 'Qwen/Qwen3.8-27B-FP8' },
+    args: VLLM_PRESET.chatArgs,
+    lifecycleMode: 'stopResume',
+    toolCallParser: 'qwen3_xml',
+    reasoningParser: 'qwen3',
+  })
+
+  const rendered = renderArgs(withParsers.args!, {
+    template: withParsers,
+    vram: planVramSplit(withParsers),
+    podApiKey: 'k',
+  })
+  assert.match(rendered, /--enable-auto-tool-choice --tool-call-parser qwen3_xml/)
+  assert.match(rendered, /--reasoning-parser qwen3/)
+
+  // A template that names no parser must render no flag at all. An empty
+  // `--tool-call-parser` would eat the following flag and fail the start with
+  // something that reads like a different problem entirely.
+  const without = templateSchema.parse({ ...withParsers, toolCallParser: null, reasoningParser: null })
+  const bare = renderArgs(without.args!, {
+    template: without,
+    vram: planVramSplit(without),
+    podApiKey: 'k',
+  })
+  assert.equal(bare.includes('tool-call-parser'), false)
+  assert.equal(bare.includes('reasoning-parser'), false)
+  assert.equal(bare.includes('  '), false, 'and it leaves no gap where the flags would have been')
 })
