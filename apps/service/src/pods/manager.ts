@@ -3,7 +3,7 @@ import type { Db } from '../store/db.js'
 import { generateToken } from '../store/crypto.js'
 import { podProxyUrl, RunpodClient, RunpodError } from '../runpod/client.js'
 import { podRoleUrls, type ActivePod } from '../gateway/routes.js'
-import { buildCreatePodRequest } from './plan.js'
+import { argsFingerprint, buildCreatePodRequest } from './plan.js'
 
 const READY_POLL_MS = 5_000
 
@@ -29,6 +29,14 @@ export interface PodRecord {
   templateId: string
   status: runpod.PodStatus
   costPerHour: number
+  /**
+   * What this pod was actually started with, when it is known.
+   *
+   * Null for pods that predate the column. Those are treated as matching, so an
+   * upgrade does not throw away a perfectly good running pod — the next real
+   * change to the template will rebuild it.
+   */
+  argsFingerprint?: string | null
 }
 
 /**
@@ -62,7 +70,16 @@ export interface PodStatusReport {
 }
 
 /**
- * Owns the lifecycle of the single active pod.
+ * Thrown when a start would exceed `maxConcurrentPods`.
+ *
+ * Its own type so the scheduler can tell "you asked for one pod too many" from
+ * "RunPod has no capacity" — the first is a decision the user can revisit, the
+ * second is not.
+ */
+export class PodLimitReached extends Error {}
+
+/**
+ * Owns the lifecycle of the pods, at most one per template.
  *
  * The two sleep modes differ in more than speed. `stopResume` keeps the machine
  * assignment, so it wakes fast — but RunPod may hand back zero GPUs if capacity
@@ -73,7 +90,14 @@ export interface PodStatusReport {
 export class PodManager {
   private startInFlight: Promise<PodRecord> | null = null
   private startedBy: PodOrigin = 'user'
-  private readyCache: { base: string; ready: boolean; at: number } | null = null
+  /**
+   * Cached health answers, keyed by pod address.
+   *
+   * One entry per pod rather than one overall: with two pods serving two
+   * applications, a single slot would have each request overwrite the other's
+   * answer and report whichever pod asked last.
+   */
+  private readonly readyCache = new Map<string, { ready: boolean; at: number }>()
 
   constructor(
     private readonly db: Db,
@@ -87,7 +111,37 @@ export class PodManager {
       encrypt: (value) => value,
       decrypt: (value) => value,
     },
+    /**
+     * How many pods may run at once. Each one is a rented GPU, so this is the
+     * guard between a handful of mappings and a handful of simultaneous bills.
+     */
+    private readonly maxConcurrentPods: () => number = () => 2,
   ) {}
+
+  /**
+   * Refuses a start that would exceed the configured number of pods.
+   *
+   * Checked before anything is created, because there is no cheap way back: a
+   * pod that exists is a pod being billed. The message names what is running so
+   * the answer is actionable — a bare "limit reached" would leave the user to
+   * go looking for which pod to stop.
+   */
+  private assertRoomForAnotherPod(templateId: string): void {
+    const limit = this.maxConcurrentPods()
+    const running = this.runningPods().filter((pod) => pod.templateId !== templateId)
+    if (running.length < limit) return
+
+    const names = new Map(
+      (this.db.prepare('SELECT id, name FROM templates').all() as Array<{ id: string; name: string }>).map(
+        (row) => [row.id, row.name],
+      ),
+    )
+    const listed = running.map((pod) => names.get(pod.templateId) ?? pod.id).join(', ')
+    throw new PodLimitReached(
+      `Already running ${running.length} of ${limit} allowed pods (${listed}). ` +
+        'Stop one of them, or raise the limit for simultaneous pods in the settings.',
+    )
+  }
 
   /** The token the running pod's engine expects, read back from storage. */
   private podApiKeyFor(podId: string): string | null {
@@ -111,52 +165,31 @@ export class PodManager {
    * hand back a dead pod as the running one and never try to start anything.
    */
   current(): PodRecord | null {
-    const row = this.db
+    return this.runningPods()[0] ?? null
+  }
+
+  /**
+   * The live pod of one template, which is what routing actually needs.
+   *
+   * `current()` answers "some pod is up", and that was the same question while
+   * only one pod ever ran. It is not the same question any more: a request from
+   * n8n has to reach n8n's pod, not whichever one started last.
+   */
+  currentFor(templateId: string): PodRecord | null {
+    return this.runningPods().find((pod) => pod.templateId === templateId) ?? null
+  }
+
+  /** Every pod the launcher considers live, newest first. */
+  runningPods(): PodRecord[] {
+    return this.db
       .prepare(
         `SELECT id, template_id AS templateId, status, cost_per_hour AS costPerHour
          FROM pods
          WHERE stopped_at IS NULL
            AND status NOT IN ('EXITED', 'TERMINATED', 'ERROR')
-         ORDER BY created_at DESC LIMIT 1`,
+         ORDER BY created_at DESC`,
       )
-      .get() as PodRecord | undefined
-    return row ?? null
-  }
-
-  /**
-   * The template a request should wake.
-   *
-   * The pod that was running last, if there is a record of one — otherwise the
-   * template with a schedule enabled. Without that fallback, wake-on-request
-   * stops working the moment the scheduler stops the pod, which is precisely
-   * when it is needed.
-   */
-  wakeTarget(): Template | null {
-    const current = this.current()
-    if (current) return this.template(current.templateId)
-
-    const lastRun = this.db
-      .prepare('SELECT template_id AS templateId FROM pods ORDER BY created_at DESC LIMIT 1')
-      .get() as { templateId: string | null } | undefined
-    if (lastRun?.templateId) {
-      const template = this.template(lastRun.templateId)
-      if (template) return template
-    }
-
-    const templates = (
-      this.db.prepare('SELECT config FROM templates ORDER BY created_at').all() as Array<{ config: string }>
-    )
-      .map((row) => templateSchema.safeParse(JSON.parse(row.config)))
-      .flatMap((parsed) => (parsed.success ? [parsed.data] : []))
-
-    const scheduled = templates.find((template) => template.schedule.enabled)
-    if (scheduled) return scheduled
-
-    // With exactly one template there is no ambiguity about what was meant, so
-    // a request wakes it even with no schedule set. More than one and no
-    // history is genuinely ambiguous — guessing there would start the wrong
-    // GPU and bill for it.
-    return templates.length === 1 ? (templates[0] ?? null) : null
+      .all() as PodRecord[]
   }
 
   template(id: string): Template | null {
@@ -180,11 +213,32 @@ export class PodManager {
   private async doStart(template: Template): Promise<PodRecord> {
     const client = this.runpod()
 
-    // Whatever is already up wins: there is nothing to start.
-    const running = this.current()
+    // This template's own pod being up means there is nothing to start. Other
+    // templates' pods are none of this start's business — they serve other
+    // applications.
+    const running = this.currentFor(template.id)
     if (running) return running
 
+    this.assertRoomForAnotherPod(template.id)
+
     const paused = template.lifecycleMode === 'stopResume' ? this.resumable(template.id) : null
+
+    // A resume brings the container back exactly as it was, arguments and all.
+    // If the template has been corrected since, resuming would quietly hand
+    // back the broken pod — which is what the person is trying to fix. Seen
+    // live with a missing vLLM tool-call parser: the template was repaired and
+    // "pause, then start" resumed the same rejecting engine.
+    if (
+      paused &&
+      paused.argsFingerprint != null &&
+      paused.argsFingerprint !== argsFingerprint(template)
+    ) {
+      await this.act(paused.id, 'terminate', 'template-changed').catch(() => undefined)
+      const podApiKey = generateToken()
+      const rebuilt = await this.createWithFallback(client, template, podApiKey)
+      return this.record(rebuilt, template.id, podApiKey)
+    }
+
     if (paused) {
       const resumed = await this.tryResume(client, paused.id, template.id)
       if (resumed) return resumed
@@ -335,8 +389,8 @@ export class PodManager {
     return template.gpuFallbackIds.filter((id) => (memory.get(id) ?? 0) >= primary)
   }
 
-  async stop(mode: Template['lifecycleMode'], reason = 'manual'): Promise<void> {
-    const existing = this.current()
+  async stop(templateId: string, mode: Template['lifecycleMode'], reason = 'manual'): Promise<void> {
+    const existing = this.currentFor(templateId)
     if (!existing) return
     // Through `act` rather than around it, so that terminating also records the
     // pod as gone. Recorded only as stopped, a terminated pod stayed a
@@ -354,12 +408,12 @@ export class PodManager {
    * download. A gateway that trusts RUNNING forwards the first request into a
    * port nothing is listening on and hands the client a bare 404.
    */
-  async waitUntilServing(podId: string, timeoutMs: number): Promise<boolean> {
+  async waitUntilServing(podId: string, templateId: string, timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + timeoutMs
     const pod = await this.waitUntilRunning(podId, timeoutMs)
     if (!pod) return false
 
-    const active = this.describe()
+    const active = this.describeFor(templateId)
     const base = active?.chatUrl ?? active?.embeddingUrl
     if (!base) return false
 
@@ -445,7 +499,8 @@ export class PodManager {
   resumable(templateId: string): PodRecord | null {
     const row = this.db
       .prepare(
-        `SELECT id, template_id AS templateId, status, cost_per_hour AS costPerHour
+        `SELECT id, template_id AS templateId, status, cost_per_hour AS costPerHour,
+                args_fingerprint AS argsFingerprint
          FROM pods
          WHERE template_id = ? AND stopped_at IS NOT NULL AND terminated_at IS NULL
          ORDER BY created_at DESC LIMIT 1`,
@@ -471,7 +526,10 @@ export class PodManager {
       .prepare('SELECT id, template_id AS templateId, started_at AS startedAt FROM pods')
       .all() as Array<{ id: string; templateId: string | null; startedAt: string | null }>
     const byId = new Map(known.map((row) => [row.id, row]))
-    const currentId = this.current()?.id ?? null
+    // Every pod the launcher considers live, because several may be. Marking
+    // only the newest as active would show a pod that is serving requests as
+    // though it were left over.
+    const active = new Set(this.runningPods().map((pod) => pod.id))
 
     const names = new Map(
       (this.db.prepare('SELECT id, name FROM templates').all() as Array<{ id: string; name: string }>).map(
@@ -494,7 +552,7 @@ export class PodManager {
           runningForSeconds: startedAt ? Math.round((Date.now() - new Date(startedAt).getTime()) / 1000) : null,
           detail: readiness.detail,
           gpu: pod.gpu?.id ?? null,
-          isActive: pod.id === currentId,
+          isActive: active.has(pod.id),
         }
       }),
     )
@@ -508,13 +566,13 @@ export class PodManager {
    * answer must not be stale for long either, since it is what decides whether
    * a request is forwarded or held.
    */
-  async engineAnswers(): Promise<boolean> {
-    const active = this.describe()
+  async engineAnswers(templateId: string): Promise<boolean> {
+    const active = this.describeFor(templateId)
     const base = active?.chatUrl ?? active?.embeddingUrl
     if (!base) return false
 
-    const cached = this.readyCache
-    if (cached && cached.base === base && Date.now() - cached.at < READY_CACHE_MS) return cached.ready
+    const cached = this.readyCache.get(base)
+    if (cached && Date.now() - cached.at < READY_CACHE_MS) return cached.ready
 
     let ready = false
     try {
@@ -523,13 +581,13 @@ export class PodManager {
     } catch {
       ready = false
     }
-    this.readyCache = { base, ready, at: Date.now() }
+    this.readyCache.set(base, { ready, at: Date.now() })
     return ready
   }
 
   /** Forgets the cached readiness, after any action that changes it. */
   private forgetReadiness(): void {
-    this.readyCache = null
+    this.readyCache.clear()
   }
 
   /** Asks the pod's own engine whether it is serving yet. */
@@ -603,28 +661,21 @@ export class PodManager {
           'Create a new pod from the same template — the model will be downloaded again.',
       )
     }
-    this.select(podId)
+    this.forgetReadiness()
     return resumed
   }
 
-  /** Makes an existing pod the one the gateway routes to. */
-  select(podId: string): boolean {
-    this.forgetReadiness()
-    const row = this.db.prepare('SELECT id FROM pods WHERE id = ?').get(podId) as { id: string } | undefined
-    if (!row) return false
-    // One pod serves at a time; the others are marked stopped locally so the
-    // gateway has an unambiguous target.
-    this.db.prepare("UPDATE pods SET stopped_at = COALESCE(stopped_at, ?) WHERE id != ?").run(
-      new Date().toISOString(),
-      podId,
-    )
-    this.db.prepare('UPDATE pods SET stopped_at = NULL WHERE id = ?').run(podId)
-    return true
-  }
-
-  /** Describes the running pod to the gateway, or null when nothing serves. */
-  describe(): ActivePod | null {
-    const record = this.current()
+  /**
+   * Describes a template's running pod to the gateway, or null when its pod is
+   * not serving.
+   *
+   * There used to be a `select()` next to this that marked every other pod
+   * stopped, purely so the gateway had one unambiguous target. That is now the
+   * token's job, and forcing a single target would break the mappings this
+   * exists to serve — so it is gone rather than reworked.
+   */
+  describeFor(templateId: string): ActivePod | null {
+    const record = this.currentFor(templateId)
     if (!record || record.status !== 'RUNNING') return null
     const template = this.template(record.templateId)
     if (!template) return null
@@ -641,15 +692,16 @@ export class PodManager {
     const podApiKey = this.podApiKeyFor(record.id)
     if (!podApiKey) return null
 
-    return { ...urls, podApiKey, servedModels }
+    return { ...urls, podApiKey, servedModels, contextTokens: template.maxModelLen ?? null }
   }
 
   private record(pod: runpod.Pod, templateId: string, podApiKey?: string): PodRecord {
     const now = new Date().toISOString()
+    const template = this.template(templateId)
     this.db
       .prepare(
-        `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, started_at, last_seen_at, api_key, started_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, started_at, last_seen_at, api_key, started_by, args_fingerprint)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET status = excluded.status,
                                        cost_per_hour = excluded.cost_per_hour,
                                        stopped_at = NULL,
@@ -657,7 +709,11 @@ export class PodManager {
                                        last_seen_at = excluded.last_seen_at,
                                        -- A resume keeps the key it was created with.
                                        api_key = COALESCE(excluded.api_key, pods.api_key),
-                                       started_by = excluded.started_by`,
+                                       started_by = excluded.started_by,
+                                       -- And it keeps the arguments it was built
+                                       -- with, which is the point of recording
+                                       -- them: only a rebuild may change this.
+                                       args_fingerprint = COALESCE(excluded.args_fingerprint, pods.args_fingerprint)`,
       )
       .run(
         pod.id,
@@ -669,6 +725,7 @@ export class PodManager {
         now,
         podApiKey === undefined ? null : this.seal.encrypt(podApiKey),
         this.startedBy,
+        template ? argsFingerprint(template) : null,
       )
     return { id: pod.id, templateId, status: pod.status, costPerHour: pod.cost }
   }

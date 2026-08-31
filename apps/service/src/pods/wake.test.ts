@@ -34,45 +34,6 @@ const setup = () => {
   return { db, manager: new PodManager(db, () => new RunpodClient('k', noop), () => null) }
 }
 
-test('after a scheduled stop, a request can still find something to wake', () => {
-  // The failure this guards against: the scheduler stops the pod at 19:00,
-  // pods.current() goes null, and wake-on-request silently stops working for
-  // the entire night — exactly when it is wanted.
-  const { db, manager } = setup()
-  const then = new Date().toISOString()
-  db.prepare(
-    `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, started_at, stopped_at)
-     VALUES ('p1', ?, 'EXITED', 0.99, ?, ?, ?)`,
-  ).run(scheduled.id, then, then, then)
-
-  assert.equal(manager.current(), null, 'the stopped pod is not current')
-  assert.equal(manager.wakeTarget()?.name, 'nightly')
-})
-
-test('with no pod history at all, the scheduled template is the target', () => {
-  const { manager } = setup()
-  assert.equal(manager.wakeTarget()?.name, 'nightly')
-})
-
-test('with no templates at all there is nothing to wake', () => {
-  const db = openDatabase(':memory:')
-  const noop = (async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch
-  const manager = new PodManager(db, () => new RunpodClient('k', noop), () => null)
-  assert.equal(manager.wakeTarget(), null)
-})
-
-test('the last pod that ran wins over the scheduled one', () => {
-  // Someone who started a different template by hand expects that one back,
-  // not whatever the schedule happens to name.
-  const { db, manager } = setup()
-  const then = new Date().toISOString()
-  db.prepare(
-    `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, started_at, stopped_at)
-     VALUES ('p2', ?, 'EXITED', 0.99, ?, ?, ?)`,
-  ).run(unscheduled.id, then, then, then)
-  assert.equal(manager.wakeTarget()?.name, 'manual')
-})
-
 test('a restart does not orphan a pod that is still running and still billed', async () => {
   // The pod's bearer token used to live only in memory. Restarting the service
   // left the launcher unable to reach a pod it was still paying for, and the
@@ -98,12 +59,12 @@ test('a restart does not orphan a pod that is still running and still billed', a
 
   const first = new PodManager(db, () => new RunpodClient('k', created), () => null, seal)
   await first.start(scheduled)
-  const before = first.describe()
+  const before = first.describeFor('t1')
   assert.ok(before?.podApiKey, 'the running pod has a key')
 
   // A brand-new manager over the same database — what a container restart is.
   const afterRestart = new PodManager(db, () => new RunpodClient('k', created), () => null, seal)
-  const after = afterRestart.describe()
+  const after = afterRestart.describeFor('t1')
 
   assert.ok(after, 'the pod is still visible after a restart')
   assert.equal(after!.podApiKey, before!.podApiKey, 'and reachable with the same key')
@@ -146,31 +107,3 @@ test('RunPod rejecting a redundant start is agreement, not failure', async () =>
   assert.equal(record.status, 'RUNNING')
 })
 
-test('a single template is woken by a request even without a schedule', () => {
-  // Otherwise wake-on-request quietly does nothing for the most common setup
-  // of all: one template, started by hand, no schedule yet.
-  const db = openDatabase(':memory:')
-  const now = new Date().toISOString()
-  db.prepare('INSERT INTO templates (id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
-    .run(unscheduled.id, unscheduled.name, JSON.stringify(unscheduled), now, now)
-  const noop = (async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch
-  const manager = new PodManager(db, () => new RunpodClient('k', noop), () => null)
-  assert.equal(manager.wakeTarget()?.name, 'manual')
-})
-
-test('several templates and no history stays ambiguous rather than guessing', () => {
-  // Picking one would start a GPU nobody asked for, and bill for it.
-  const { manager } = setup()
-  const db = openDatabase(':memory:')
-  const now = new Date().toISOString()
-  const insert = db.prepare('INSERT INTO templates (id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
-  const second = { ...unscheduled, id: 't3', name: 'another' }
-  insert.run(unscheduled.id, unscheduled.name, JSON.stringify(unscheduled), now, now)
-  insert.run(second.id, second.name, JSON.stringify(second), now, now)
-  const noop = (async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch
-  const ambiguous = new PodManager(db, () => new RunpodClient('k', noop), () => null)
-
-  assert.equal(ambiguous.wakeTarget(), null)
-  // The scheduled case from the other fixture still resolves.
-  assert.equal(manager.wakeTarget()?.name, 'nightly')
-})

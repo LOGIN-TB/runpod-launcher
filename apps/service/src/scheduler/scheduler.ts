@@ -9,6 +9,13 @@ import type { NotificationSink } from './notify.js'
 
 const TICK_MS = 60_000
 
+/** What the scheduler decided for one template, and why. */
+export interface ScheduledDecision {
+  templateId: string
+  templateName: string
+  action: Action
+}
+
 interface Logger {
   info: (obj: unknown, msg: string) => void
   warn: (obj: unknown, msg: string) => void
@@ -57,32 +64,47 @@ export class Scheduler {
    * A schedule that quietly does nothing is very hard to diagnose from the
    * outside; this lets the app show the reason at any hour.
    */
-  async preview(now: Date = new Date()): Promise<Action | null> {
-    const template = this.scheduledTemplate()
-    if (!template) return null
+  async preview(now: Date = new Date()): Promise<ScheduledDecision[]> {
+    const templates = this.scheduledTemplates()
+    if (templates.length === 0) return []
     const settings = this.settings.read()
     const snapshot = await this.spend.snapshot(now)
-    return decide({
-      template,
-      pod: await this.podStateAsync(),
-      spend: {
-        todayUsd: snapshot.todayUsd,
-        monthUsd: snapshot.monthUsd,
-        dailyLimitUsd: settings.dailyLimitUsd,
-        monthlyLimitUsd: settings.monthlyLimitUsd,
-      },
-      now,
-    })
+
+    return Promise.all(
+      templates.map(async (template) => ({
+        templateId: template.id,
+        templateName: template.name,
+        action: decide({
+          template,
+          pod: await this.podStateAsync(template.id),
+          spend: {
+            todayUsd: snapshot.todayUsd,
+            monthUsd: snapshot.monthUsd,
+            dailyLimitUsd: settings.dailyLimitUsd,
+            monthlyLimitUsd: settings.monthlyLimitUsd,
+          },
+          now,
+        }),
+      })),
+    )
   }
 
-  /** One pass. Public so tests can drive it without waiting a minute. */
+  /**
+   * One pass over every scheduled template. Public so tests can drive it
+   * without waiting a minute.
+   *
+   * Returns the one action worth reporting — the first that actually did
+   * something, or null when every template was left alone. Each template's own
+   * decision is logged and audited regardless.
+   */
   async tick(now: Date = new Date()): Promise<Action | null> {
     // A tick that overruns must not overlap the next one: starting a pod takes
     // minutes, and two ticks both deciding to start would rent two GPUs.
     if (this.running) return null
     this.running = true
     try {
-      return await this.runOnce(now)
+      const acted = await this.runOnce(now)
+      return acted.find((entry) => entry.action.do !== 'nothing')?.action ?? acted[0]?.action ?? null
     } catch (error) {
       this.log.error({ error: (error as Error).message }, 'scheduler tick failed')
       return null
@@ -91,7 +113,7 @@ export class Scheduler {
     }
   }
 
-  private async runOnce(now: Date): Promise<Action | null> {
+  private async runOnce(now: Date): Promise<ScheduledDecision[]> {
     // Cheap when there is nothing to do, and it catches pods left behind by an
     // earlier version or by a start that failed halfway.
     await reapSupersededPods(this.db, this.pods, (message, detail) => this.log.info(detail, message)).catch(
@@ -106,19 +128,40 @@ export class Scheduler {
         this.log.info({}, 'scheduler idle: no RunPod key configured yet')
         this.warnedAboutKey = true
       }
-      return null
+      return []
     }
     this.warnedAboutKey = false
 
-    const template = this.scheduledTemplate()
-    if (!template) return null
+    const templates = this.scheduledTemplates()
+    if (templates.length === 0) return []
 
     const settings = this.settings.read()
     const snapshot = await this.spend.snapshot(now)
 
+    // One after another rather than in parallel: starts are what consume the
+    // concurrent-pod budget, and two decided in the same instant would each see
+    // room for one more.
+    const decisions: ScheduledDecision[] = []
+    for (const template of templates) {
+      decisions.push({
+        templateId: template.id,
+        templateName: template.name,
+        action: await this.applyTo(template, snapshot, settings, now),
+      })
+    }
+    return decisions
+  }
+
+  /** Decides for one template, and carries the decision out. */
+  private async applyTo(
+    template: Template,
+    snapshot: { todayUsd: number; monthUsd: number },
+    settings: { dailyLimitUsd: number | null; monthlyLimitUsd: number | null },
+    now: Date,
+  ): Promise<Action> {
     const action = decide({
       template,
-      pod: await this.podStateAsync(),
+      pod: await this.podStateAsync(template.id),
       spend: {
         todayUsd: snapshot.todayUsd,
         monthUsd: snapshot.monthUsd,
@@ -133,7 +176,7 @@ export class Scheduler {
     this.audit(action, template)
 
     if (action.do === 'stop') {
-      await this.pods.stop(template.lifecycleMode, action.because)
+      await this.pods.stop(template.id, template.lifecycleMode, action.because)
       await this.notifier.send({
         kind:
           action.because === 'daily-limit' || action.because === 'monthly-limit'
@@ -156,7 +199,9 @@ export class Scheduler {
       })
     } catch (error) {
       // A failed scheduled start is silent otherwise: nobody is watching at
-      // 07:00, and the first sign would be a workflow timing out later.
+      // 07:00, and the first sign would be a workflow timing out later. The
+      // concurrent-pod limit arrives here too, which is why it names the pods
+      // that are holding the slots.
       await this.notifier.send({
         kind: 'pod-start-failed',
         message: `Could not start ${template.name}: ${(error as Error).message}`,
@@ -168,49 +213,62 @@ export class Scheduler {
   }
 
   /**
-   * The template the schedule acts on.
+   * Every template the schedule has something to say about.
    *
-   * If a pod is up, it is that pod's template — stopping something means
-   * stopping what is actually running. Otherwise it is the one template with a
-   * schedule enabled. More than one would need a pod each, which is a later
-   * feature; here the first is taken and the rest ignored loudly.
+   * Two groups, and both are needed. Templates with a pod up, because stopping
+   * something means stopping what is actually running — including a pod started
+   * by hand from a template with no schedule at all. And templates with a
+   * schedule enabled, because that is what a start comes from.
+   *
+   * This used to return one template and warn that the rest were ignored. It
+   * was true then and is not now: applications are mapped to their own pods, so
+   * a schedule that only ever governed the first of them would leave the others
+   * running all night.
    */
-  private scheduledTemplate(): Template | null {
-    const current = this.pods.current()
-    if (current) return this.pods.template(current.templateId)
+  private scheduledTemplates(): Template[] {
+    const byId = new Map<string, Template>()
+
+    for (const pod of this.pods.runningPods()) {
+      const template = this.pods.template(pod.templateId)
+      if (template) byId.set(template.id, template)
+    }
 
     const rows = this.db.prepare('SELECT config FROM templates ORDER BY created_at').all() as Array<{ config: string }>
-    const scheduled = rows
-      .map((row) => templateSchema.safeParse(JSON.parse(row.config)))
-      .flatMap((result) => (result.success ? [result.data] : []))
-      .filter((template) => template.schedule.enabled)
-
-    if (scheduled.length > 1) {
-      this.log.warn(
-        { using: scheduled[0]?.name, ignored: scheduled.slice(1).map((t) => t.name) },
-        'more than one template has a schedule; only one pod runs at a time',
-      )
+    for (const row of rows) {
+      const parsed = templateSchema.safeParse(JSON.parse(row.config))
+      if (parsed.success && parsed.data.schedule.enabled && !byId.has(parsed.data.id)) {
+        byId.set(parsed.data.id, parsed.data)
+      }
     }
-    return scheduled[0] ?? null
+
+    return [...byId.values()]
   }
 
-  private async podStateAsync(): Promise<PodState> {
-    const base = this.podState()
+  private async podStateAsync(templateId: string): Promise<PodState> {
+    const base = this.podStateFor(templateId)
     if (base.status !== 'RUNNING') return base
     // Asking the engine directly, because RunPod's RUNNING arrives minutes
     // before it can answer anything.
-    return { ...base, engineReady: this.pods.describe() !== null && (await this.pods.engineAnswers()) }
+    return {
+      ...base,
+      engineReady:
+        this.pods.describeFor(templateId) !== null && (await this.pods.engineAnswers(templateId)),
+    }
   }
 
-  private podState(): PodState {
-    const record = this.pods.current()
+  private podStateFor(templateId: string): PodState {
+    const record = this.pods.currentFor(templateId)
     const row = this.db
       .prepare('SELECT started_at AS startedAt FROM pods WHERE id = ?')
       .get(record?.id ?? '') as { startedAt: string | null } | undefined
 
+    // This template's own traffic. Read across all templates, a busy pod would
+    // keep every idle one alive — the same mistake that once measured a fresh
+    // pod's idleness from another pod's last request and killed it after 64
+    // seconds under a thirty-minute limit.
     const lastRequest = this.db
-      .prepare('SELECT at FROM usage ORDER BY id DESC LIMIT 1')
-      .get() as { at: string } | undefined
+      .prepare('SELECT at FROM usage WHERE template_id = ? ORDER BY id DESC LIMIT 1')
+      .get(templateId) as { at: string } | undefined
 
     const startedBy = this.db
       .prepare('SELECT started_by AS startedBy FROM pods WHERE id = ?')
@@ -218,9 +276,11 @@ export class Scheduler {
 
     const idleStop = this.db
       .prepare(
-        "SELECT stopped_at AS stoppedAt FROM pods WHERE stop_reason = 'idle-timeout' ORDER BY stopped_at DESC LIMIT 1",
+        `SELECT stopped_at AS stoppedAt FROM pods
+          WHERE stop_reason = 'idle-timeout' AND template_id = ?
+          ORDER BY stopped_at DESC LIMIT 1`,
       )
-      .get() as { stoppedAt: string | null } | undefined
+      .get(templateId) as { stoppedAt: string | null } | undefined
 
     return {
       status: (record?.status as PodState['status']) ?? null,

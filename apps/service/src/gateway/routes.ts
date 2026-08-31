@@ -12,6 +12,15 @@ export interface ActivePod {
   podApiKey: string
   /** Model names this pod actually answers to. */
   servedModels: readonly string[]
+  /**
+   * The per-request context window, in tokens.
+   *
+   * Reported to clients because they ask. An agent that cannot read the limit
+   * sizes its requests by guesswork, and vLLM then rejects the whole call:
+   * `max_tokens=65536 cannot be greater than max_model_len=16384`. Seen live,
+   * the agent read that as its own context being full and shut itself down.
+   */
+  contextTokens: number | null
 }
 
 /**
@@ -31,6 +40,33 @@ export type PodResolution =
    * Observed — stopped at 21:30:19, replaced at 21:30:21.
    */
   | { state: 'outside-hours'; window: string }
+  /**
+   * The client's token has no template, so there is no pod to route to.
+   *
+   * Kept apart from `none` because the remedy is different: nothing is wrong
+   * with the hardware, the mapping is simply missing.
+   */
+  | { state: 'unassigned' }
+
+/**
+ * Who is calling, and which pod they may reach.
+ *
+ * The target travels with the identity because the token is the routing key:
+ * the application sends it already, so pointing n8n at other hardware is a
+ * change here and nothing at all on their side.
+ */
+export interface GatewayIdentity {
+  id: string
+  name: string
+  templateId: string | null
+}
+
+/** What to tell a client about the models it may use. */
+export interface AdvertisedModels {
+  names: readonly string[]
+  /** The per-request window, so a client can size its own requests. */
+  contextTokens: number | null
+}
 
 export interface GatewayDeps {
   /**
@@ -40,7 +76,7 @@ export interface GatewayDeps {
    * arbitrary agent knows nothing about `/wake`, so the first request after the
    * pod slept has to be the thing that wakes it.
    */
-  resolvePod(options: { wait: boolean }): Promise<PodResolution>
+  resolvePod(options: { wait: boolean; client: GatewayIdentity }): Promise<PodResolution>
   /**
    * Models to advertise, whether or not a pod is up.
    *
@@ -49,11 +85,12 @@ export interface GatewayDeps {
    * agent simply reports "0 models" and stops. What a sleeping template would
    * serve is the honest answer, and asking for it is what starts the pod.
    */
-  advertisedModels(): Promise<readonly string[]>
+  advertisedModels(client: GatewayIdentity): Promise<AdvertisedModels>
 
-  authenticateClient(token: string): Promise<{ id: string; name: string } | null>
+  authenticateClient(token: string): Promise<GatewayIdentity | null>
   recordUsage(entry: {
     tokenId: string
+    templateId: string | null
     endpoint: string
     model: string | null
     durationMs: number
@@ -70,7 +107,7 @@ export async function registerGatewayRoutes(app: FastifyInstance, deps: GatewayD
   async function authenticate(
     request: FastifyRequest,
     reply: FastifyReply,
-  ): Promise<{ id: string; name: string } | null> {
+  ): Promise<GatewayIdentity | null> {
     const match = BEARER.exec(request.headers.authorization ?? '')
     const client = match?.[1] ? await deps.authenticateClient(match[1]) : null
     if (!client) {
@@ -81,23 +118,37 @@ export async function registerGatewayRoutes(app: FastifyInstance, deps: GatewayD
   }
 
   app.get('/v1/models', async (request, reply) => {
-    if (!(await authenticate(request, reply))) return
+    const client = await authenticate(request, reply)
+    if (!client) return
 
-    const resolution = await deps.resolvePod({ wait: false }).catch(() => ({ state: 'none' }) as const)
-    const servedModels =
+    const resolution = await deps
+      .resolvePod({ wait: false, client })
+      .catch(() => ({ state: 'none' }) as const)
+    const advertised =
       resolution.state === 'ready'
-        ? resolution.pod.servedModels
+        ? { names: resolution.pod.servedModels, contextTokens: resolution.pod.contextTokens }
         : // Nothing running: advertise what would be served, so a client can
-          // choose it and let the request bring the pod up.
-          await deps.advertisedModels().catch(() => [])
+          // choose it and let the request bring the pod up. Only this client's
+          // own template, or an agent lists models it can never reach.
+          await deps
+            .advertisedModels(client)
+            .catch(() => ({ names: [], contextTokens: null }) as AdvertisedModels)
+
     const created = Math.floor(Date.now() / 1000)
     return reply.send({
       object: 'list',
-      data: servedModels.map((id) => ({
+      data: advertised.names.map((id) => ({
         id,
         object: 'model',
         created,
         owned_by: 'runpod-launcher',
+        // Named as vLLM names it, because that is what clients written against
+        // a self-hosted OpenAI endpoint look for. Reporting nothing leaves an
+        // agent to guess, and a guess of 65536 output tokens against a 16384
+        // window fails the whole request.
+        ...(advertised.contextTokens === null
+          ? {}
+          : { max_model_len: advertised.contextTokens, context_length: advertised.contextTokens }),
       })),
     })
   })
@@ -127,7 +178,7 @@ export async function registerGatewayRoutes(app: FastifyInstance, deps: GatewayD
 
     let resolution: PodResolution
     try {
-      resolution = await deps.resolvePod({ wait: true })
+      resolution = await deps.resolvePod({ wait: true, client })
     } catch (error) {
       // Anything thrown while resolving — a missing RunPod key, a RunPod
       // outage — must still leave the client with an OpenAI-shaped body. A
@@ -137,6 +188,10 @@ export async function registerGatewayRoutes(app: FastifyInstance, deps: GatewayD
       return
     }
 
+    if (resolution.state === 'unassigned') {
+      await reply.code(400).send(errors.unassigned(client.name))
+      return
+    }
     if (resolution.state === 'none') {
       await reply.code(503).send(errors.noPod())
       return
@@ -201,6 +256,10 @@ export async function registerGatewayRoutes(app: FastifyInstance, deps: GatewayD
 
     deps.recordUsage({
       tokenId: client.id,
+      // Recorded per template, because the idle rule reads the newest request
+      // to decide whether a pod is still wanted. Read across all pods, traffic
+      // on one would keep every other one awake.
+      templateId: client.templateId,
       endpoint: upstreamPath,
       model: requestedModel,
       durationMs: Date.now() - startedAt,

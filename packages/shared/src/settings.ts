@@ -22,6 +22,15 @@ export const settingsSchema = z.object({
    */
   wakeWaitSeconds: z.number().int().min(0).max(900).default(240),
 
+  /**
+   * How many pods may run at the same time.
+   *
+   * Each one is a rented GPU, so this is the guard that keeps a few mappings
+   * from becoming a few simultaneous bills. The daily and monthly limits still
+   * apply to all of them together.
+   */
+  maxConcurrentPods: z.number().int().min(1).max(10).default(2),
+
   /** Hard spend limits. The scheduler force-stops the pod when either is hit. */
   dailyLimitUsd: z.number().min(0).nullable().default(null),
   monthlyLimitUsd: z.number().min(0).nullable().default(null),
@@ -71,6 +80,7 @@ export const settingsPatchSchema = z
     notifyWebhookUrl: z.string().url().nullable(),
     corsOrigins: z.array(z.string()),
     wakeWaitSeconds: z.number().int().min(0).max(900),
+    maxConcurrentPods: z.number().int().min(1).max(10),
     dailyLimitUsd: z.number().min(0).nullable(),
     monthlyLimitUsd: z.number().min(0).nullable(),
     timezone: z.string(),

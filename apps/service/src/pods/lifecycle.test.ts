@@ -86,7 +86,7 @@ test('a paused pod is the one that gets woken, not a brand-new one', async () =>
   const first = await manager.start(template())
   assert.equal(first.id, 'new-1')
 
-  await manager.stop('stopResume', 'outside-schedule')
+  await manager.stop('t1', 'stopResume', 'outside-schedule')
   const second = await manager.start(template())
 
   assert.equal(second.id, 'new-1', 'the same pod came back')
@@ -113,7 +113,7 @@ test('when resuming fails the old pod is terminated, not left behind', async () 
   const { manager, db } = setup(fake)
 
   await manager.start(template())
-  await manager.stop('stopResume', 'outside-schedule')
+  await manager.stop('t1', 'stopResume', 'outside-schedule')
   const replacement = await manager.start(template())
 
   assert.equal(replacement.id, 'new-2')
@@ -133,7 +133,7 @@ test('a full cycle leaves exactly one pod, which was the whole complaint', async
 
   for (let cycle = 0; cycle < 3; cycle += 1) {
     await manager.start(template())
-    await manager.stop('stopResume', 'outside-schedule')
+    await manager.stop('t1', 'stopResume', 'outside-schedule')
   }
 
   const alive = db
@@ -187,7 +187,7 @@ test('recreate mode terminates on stop, so nothing accumulates there either', as
   const { manager, db } = setup(fake, tpl)
 
   await manager.start(tpl)
-  await manager.stop('recreate', 'outside-schedule')
+  await manager.stop('t1', 'recreate', 'outside-schedule')
 
   assert.ok(fake.actions.includes('terminate:new-1'))
   const row = db.prepare('SELECT terminated_at AS t FROM pods WHERE id = ?').get('new-1') as { t: string | null }
@@ -229,4 +229,81 @@ test('a failure to reach RunPod terminates nothing at all', async () => {
 
   const result = await reapSupersededPods(db, manager, () => {})
   assert.deepEqual(result, { terminated: [], kept: [] })
+})
+
+test('the reaper leaves every running pod alone, not just the newest', async () => {
+  // With one pod per application there is more than one live pod, and they are
+  // not interchangeable. Keeping only the newest would have this terminate a
+  // pod that is answering somebody's requests right now.
+  const fake = fakeRunpod()
+  const { manager, db } = setup(fake)
+  const now = new Date().toISOString()
+
+  db.prepare('INSERT INTO templates (id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+    .run('t2', 'second', JSON.stringify(template({ id: 't2', name: 'second' })), now, now)
+
+  const live = db.prepare(
+    `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, started_at)
+     VALUES (?, ?, 'RUNNING', 0.44, ?, ?)`,
+  )
+  live.run('pod-a', 't1', '2026-09-01T01:00:00Z', now)
+  live.run('pod-b', 't2', '2026-09-01T02:00:00Z', now)
+  // And one genuinely superseded pod, to show the reaper still does its job.
+  db.prepare(
+    `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, started_at, stopped_at, terminated_at)
+     VALUES ('leftover', 't1', 'EXITED', 0.44, '2026-08-31T00:00:00Z', ?, ?, NULL)`,
+  ).run(now, now)
+  // A stopped pod that terminate has already claimed, so it is not the one a
+  // resume would wake.
+  db.prepare("UPDATE pods SET terminated_at = ? WHERE id = 'leftover'").run(now)
+  for (const id of ['pod-a', 'pod-b', 'leftover']) fake.livePods.add(id)
+
+  const result = await reapSupersededPods(db, manager, () => {})
+
+  assert.deepEqual(result.kept.sort(), ['pod-a', 'pod-b'], 'both live pods survive')
+  assert.deepEqual(result.terminated, ['leftover'])
+})
+
+test('a corrected template rebuilds the pod instead of resuming the broken one', async () => {
+  // Seen live: a vLLM pod was started without a tool-call parser, so the agent's
+  // first message came back as HTTP 400. The template was corrected, and
+  // "pause, then start" resumed the very same container — the obvious repair
+  // gesture doing nothing, with nothing to say why.
+  const fake = fakeRunpod()
+  const before = template({ args: 'model --port 8000 --max-num-seqs {{maxConcurrentSequences}}' })
+  const { manager, db } = setup(fake, before)
+
+  const first = await manager.start(before)
+  await manager.stop(before.id, 'stopResume', 'manual')
+  assert.equal(manager.resumable(before.id)?.id, first.id, 'it is there to be resumed')
+
+  // The same template, now asking for something different.
+  const after = template({
+    args: 'model --port 8000 --max-num-seqs {{maxConcurrentSequences}} {{toolFlags}}',
+    toolCallParser: 'qwen3_xml',
+  })
+  db.prepare('UPDATE templates SET config = ? WHERE id = ?').run(JSON.stringify(after), after.id)
+
+  const rebuilt = await manager.start(after)
+  assert.notEqual(rebuilt.id, first.id, 'a new pod, because the old one cannot be changed')
+  assert.deepEqual(
+    fake.actions.filter((entry) => entry.startsWith('terminate:')),
+    [`terminate:${first.id}`],
+    'and the old one is ended rather than left billing',
+  )
+})
+
+test('a pod recorded before arguments were tracked is still resumed', async () => {
+  // An upgrade must not throw away a working pod just because we cannot say
+  // what it was started with. The next real change to the template rebuilds it.
+  const fake = fakeRunpod()
+  const tpl = template({ args: 'model --port 8000' })
+  const { manager, db } = setup(fake, tpl)
+
+  const first = await manager.start(tpl)
+  await manager.stop(tpl.id, 'stopResume', 'manual')
+  db.prepare('UPDATE pods SET args_fingerprint = NULL WHERE id = ?').run(first.id)
+
+  const resumed = await manager.start(tpl)
+  assert.equal(resumed.id, first.id, 'the same pod comes back')
 })

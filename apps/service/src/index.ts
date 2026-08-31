@@ -8,6 +8,7 @@ import { TokenStore } from './auth/tokens.js'
 import { RunpodClient } from './runpod/client.js'
 import { PodManager } from './pods/manager.js'
 import { registerGatewayRoutes } from './gateway/routes.js'
+import { createPodResolver } from './gateway/resolve.js'
 import { registerAdminRoutes } from './admin/routes.js'
 import { registerCors } from './http/cors.js'
 import { PairingService } from './auth/pairing.js'
@@ -17,7 +18,6 @@ import { Notifier } from './scheduler/notify.js'
 import { Scheduler } from './scheduler/scheduler.js'
 import { InFlight } from './gateway/inflight.js'
 import { reapSupersededPods } from './pods/reaper.js'
-import { isInsideWindow } from './scheduler/decide.js'
 
 const config = loadConfig()
 const app = Fastify({
@@ -44,10 +44,16 @@ const requireRunpodKey = (): RunpodClient => {
   return new RunpodClient(key)
 }
 
-const pods = new PodManager(db, requireRunpodKey, () => settings.secret('huggingfaceToken'), {
-  encrypt: (value) => encryptSecret(masterKey, value),
-  decrypt: (value) => decryptSecret(masterKey, value),
-})
+const pods = new PodManager(
+  db,
+  requireRunpodKey,
+  () => settings.secret('huggingfaceToken'),
+  {
+    encrypt: (value) => encryptSecret(masterKey, value),
+    decrypt: (value) => decryptSecret(masterKey, value),
+  },
+  () => settings.read().maxConcurrentPods,
+)
 const pairing = new PairingService(db, tokens, config.pairingCode ?? generatePairingCode())
 const huggingface = new HuggingFaceClient(() => settings.secret('huggingfaceToken'))
 const spend = new SpendTracker(db, requireRunpodKey, () => settings.read().timezone)
@@ -67,68 +73,23 @@ app.get('/health', async () => ({
   pod: pods.current(),
 }))
 
+const resolver = createPodResolver({ pods, wakeWaitSeconds: () => settings.read().wakeWaitSeconds })
+
 await registerGatewayRoutes(app, {
-  resolvePod: async ({ wait }) => {
-    const active = pods.describe()
-    if (active) {
-      // A pod our records call RUNNING is not necessarily serving: RunPod
-      // reports RUNNING minutes before the engine binds its port, and its
-      // proxy answers 404 until something is listening. Forwarding into that
-      // handed clients a bare 404 within a third of a second — the request
-      // looked rejected when it had simply arrived too early.
-      if (await pods.engineAnswers()) return { state: 'ready', pod: active }
-
-      const waitSeconds = settings.read().wakeWaitSeconds
-      if (!wait || waitSeconds === 0) return { state: 'starting' }
-
-      const record = pods.current()
-      const serving = record ? await pods.waitUntilServing(record.id, waitSeconds * 1000) : false
-      const ready = serving ? pods.describe() : null
-      return ready ? { state: 'ready', pod: ready } : { state: 'starting' }
-    }
-
-    // Falls back to the scheduled template, so a request arriving after the
-    // night shutdown can still wake the pod — which is the whole point of
-    // wake-on-request.
-    const template = pods.wakeTarget()
-    if (!template) return { state: 'none' }
-
-    // But not against the template's own schedule. Waking a pod the schedule
-    // has just stopped makes the schedule meaningless and rents hardware
-    // nobody agreed to: seen live, stopped at 21:30:19 and replaced two
-    // seconds later by the next request from the same agent.
-    const schedule = template.schedule
-    if (schedule.enabled && schedule.startAt && schedule.stopAt && !isInsideWindow(schedule, new Date())) {
-      return { state: 'outside-hours', window: `${schedule.startAt}–${schedule.stopAt} ${schedule.timezone}` }
-    }
-
-    const waitSeconds = settings.read().wakeWaitSeconds
-    if (!wait || waitSeconds === 0) return { state: 'starting' }
-
-    // Recorded as a client wake, not a person at the keyboard: the manual-start
-    // exception must not apply here, or a woken pod would outlive the schedule.
-    const record = await pods.start(template, 'client')
-    // Waits for the engine to answer, not just for RunPod to schedule the
-    // container — those are minutes apart, and the gap is exactly where a
-    // client would get a bare 404 from a port nothing is listening on.
-    const serving = await pods.waitUntilServing(record.id, waitSeconds * 1000)
-    const served = serving ? pods.describe() : null
-    return served ? { state: 'ready', pod: served } : { state: 'starting' }
-  },
-  advertisedModels: async () => {
-    const active = pods.describe()
-    if (active) return active.servedModels
-    const template = pods.wakeTarget()
-    if (!template) return []
-    return [template.chatModel, template.embeddingModel]
-      .filter((slot) => slot !== null)
-      .map((slot) => slot.servedName ?? slot.repoId)
-  },
+  ...resolver,
   authenticateClient: async (token) => tokens.verify('client_tokens', token),
   recordUsage: (entry) => {
     db.prepare(
-      `INSERT INTO usage (at, token_id, model, endpoint, duration_ms) VALUES (?, ?, ?, ?, ?)`,
-    ).run(new Date().toISOString(), entry.tokenId, entry.model, entry.endpoint, entry.durationMs)
+      `INSERT INTO usage (at, token_id, template_id, model, endpoint, duration_ms)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      new Date().toISOString(),
+      entry.tokenId,
+      entry.templateId,
+      entry.model,
+      entry.endpoint,
+      entry.durationMs,
+    )
   },
   wakeWaitSeconds: () => settings.read().wakeWaitSeconds,
   track: (work) => inFlight.track(work),

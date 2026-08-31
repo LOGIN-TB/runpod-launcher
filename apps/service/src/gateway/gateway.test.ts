@@ -5,7 +5,7 @@ import { registerGatewayRoutes, type GatewayDeps } from './routes.js'
 
 const deps = (overrides: Partial<GatewayDeps> = {}): GatewayDeps => ({
   resolvePod: async () => ({ state: 'none' }),
-  advertisedModels: async () => [],
+  advertisedModels: async () => ({ names: [], contextTokens: null }),
   authenticateClient: async (token) => (token === 'good' ? { id: 'c1', name: 'client' } : null),
   recordUsage: () => {},
   wakeWaitSeconds: () => 60,
@@ -89,7 +89,7 @@ test('models are advertised while the pod sleeps, or no client can ever wake it'
     const server = await app(
       deps({
         resolvePod: async () => ({ state: 'none' }),
-        advertisedModels: async () => ['Qwen/Qwen3.8-27B-FP8', 'Qwen/Qwen3-Embedding-0.6B'],
+        advertisedModels: async () => ({ names: ['Qwen/Qwen3.8-27B-FP8', 'Qwen/Qwen3-Embedding-0.6B'], contextTokens: null }),
       }),
     )
     const response = await server.inject({
@@ -110,9 +110,9 @@ test('a running pod still reports what it actually serves, not the template', as
     deps({
       resolvePod: async () => ({
         state: 'ready',
-        pod: { chatUrl: 'http://x', embeddingUrl: null, podApiKey: 'k', servedModels: ['actually-loaded'] },
+        pod: { chatUrl: 'http://x', embeddingUrl: null, podApiKey: 'k', servedModels: ['actually-loaded'], contextTokens: 131072 },
       }),
-      advertisedModels: async () => ['something-else'],
+      advertisedModels: async () => ({ names: ['something-else'], contextTokens: null }),
     }),
   )
   const response = await server.inject({ method: 'GET', url: '/v1/models', headers: { authorization: 'Bearer good' } })
@@ -149,7 +149,7 @@ test('a 404 from the proxy in front of the pod is not passed off as the engineâ€
     deps({
       resolvePod: async () => ({
         state: 'ready',
-        pod: { chatUrl: 'http://pod', embeddingUrl: null, podApiKey: 'k', servedModels: ['m'] },
+        pod: { chatUrl: 'http://pod', embeddingUrl: null, podApiKey: 'k', servedModels: ['m'], contextTokens: 16384 },
       }),
     }),
   )
@@ -178,7 +178,7 @@ test('a genuine 404 from the engine is passed through unchanged', async () => {
     deps({
       resolvePod: async () => ({
         state: 'ready',
-        pod: { chatUrl: 'http://pod', embeddingUrl: null, podApiKey: 'k', servedModels: ['m'] },
+        pod: { chatUrl: 'http://pod', embeddingUrl: null, podApiKey: 'k', servedModels: ['m'], contextTokens: 16384 },
       }),
     }),
   )

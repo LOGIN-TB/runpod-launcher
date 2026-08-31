@@ -83,19 +83,27 @@ export class SpendTracker {
     }
   }
 
-  /** Cost of the run currently in progress, which billing has not booked yet. */
+  /**
+   * Cost of the runs currently in progress, which billing has not booked yet.
+   *
+   * Every running pod, summed. This used to take the newest one alone, which
+   * was the same thing while only one pod ran — and would now report half the
+   * spend for two pods. That figure is what the daily and monthly limits are
+   * compared against, so under-reporting it disables the brake.
+   */
   private liveRunCost(now: Date): number {
-    const row = this.db
+    const rows = this.db
       .prepare(
         `SELECT cost_per_hour AS rate, started_at AS startedAt
-         FROM pods WHERE stopped_at IS NULL AND status = 'RUNNING'
-         ORDER BY created_at DESC LIMIT 1`,
+         FROM pods WHERE stopped_at IS NULL AND status = 'RUNNING'`,
       )
-      .get() as { rate: number; startedAt: string | null } | undefined
+      .all() as Array<{ rate: number; startedAt: string | null }>
 
-    if (!row?.startedAt) return 0
-    const hours = (now.getTime() - new Date(row.startedAt).getTime()) / 3_600_000
-    return Math.max(0, hours) * row.rate
+    return rows.reduce((total, row) => {
+      if (!row.startedAt) return total
+      const hours = (now.getTime() - new Date(row.startedAt).getTime()) / 3_600_000
+      return total + Math.max(0, hours) * row.rate
+    }, 0)
   }
 }
 

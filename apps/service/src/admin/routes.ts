@@ -213,8 +213,10 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps)
   app.get('/schedule/preview', async (request, reply) => {
     if (!(await requireDevice(request, reply))) return
     try {
-      const action = await deps.scheduler.preview(new Date())
-      return reply.send({ action })
+      // One entry per template with a schedule or a pod up, because each has
+      // its own decision now — showing only the first would hide the rest.
+      const actions = await deps.scheduler.preview(new Date())
+      return reply.send({ actions })
     } catch (error) {
       return reply.code(502).send({ error: (error as Error).message })
     }
@@ -357,16 +359,6 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps)
     }
   })
 
-  /** Route the gateway at a different existing pod. */
-  app.post('/pods/:id/select', async (request, reply) => {
-    const device = await requireDevice(request, reply)
-    if (!device) return
-    const { id } = request.params as { id: string }
-    if (!pods.select(id)) return reply.code(404).send({ error: 'Unknown pod' })
-    audit(device.id, 'pod.select', { podId: id }, request.ip)
-    return reply.send({ selected: id })
-  })
-
   /**
    * Sends a real request to the active pod and reports what came back.
    *
@@ -376,7 +368,9 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps)
    */
   app.post('/pod/selftest', async (request, reply) => {
     if (!(await requireDevice(request, reply))) return
-    const serving = pods.describe()
+    const asked = (request.body as { templateId?: string } | undefined)?.templateId
+    const templateId = asked ?? pods.current()?.templateId
+    const serving = templateId ? pods.describeFor(templateId) : null
     if (!serving) return reply.send({ ok: false, reason: 'no-pod' })
 
     const target = serving.chatUrl ?? serving.embeddingUrl
@@ -436,7 +430,7 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps)
     audit(device.id, 'template.updated', { id, name: parsed.data.name }, request.ip)
     // A running pod keeps the settings it was built with; the change applies to
     // the next pod. Saying so beats letting somebody wonder why nothing moved.
-    return reply.send({ ...parsed.data, appliesToNextPod: pods.current()?.templateId === id })
+    return reply.send({ ...parsed.data, appliesToNextPod: pods.currentFor(id) !== null })
   })
 
   app.delete('/templates/:id', async (request, reply) => {
@@ -446,8 +440,7 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps)
 
     // Refuse while it is in use rather than leaving a running pod with no
     // template behind it — that pod would still bill and could not be resumed.
-    const active = pods.current()
-    if (active?.templateId === id) {
+    if (pods.currentFor(id)) {
       return reply.code(409).send({ error: 'This template has a pod running. Stop the pod first.' })
     }
     db.prepare('DELETE FROM templates WHERE id = ?').run(id)
@@ -457,10 +450,24 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps)
 
   app.get('/pod', async (request, reply) => {
     if (!(await requireDevice(request, reply))) return
-    const serving = pods.describe()
+    // A named template's pod when asked for one, otherwise the newest — the
+    // setup wizard only wants to know whether anything is up yet. The full
+    // picture is `/pods`.
+    const asked = (request.query as { templateId?: string } | undefined)?.templateId
+    const record = asked ? pods.currentFor(asked) : pods.current()
+    const serving = record ? pods.describeFor(record.templateId) : null
+
+    // Whether a pod has ever existed here, which is a different question from
+    // whether one is up. The setup guide asks the first — "has a start been
+    // through once" — and reading the second made its third step reopen itself
+    // every time the pod stopped, with a "check again" button that could never
+    // complete it.
+    const { count } = db.prepare('SELECT COUNT(*) AS count FROM pods').get() as { count: number }
+
     return reply.send({
-      pod: pods.current(),
-      // `describe()` carries the pod's own bearer token because the gateway
+      pod: record,
+      everStarted: count > 0,
+      // `describeFor()` carries the pod's own bearer token because the gateway
       // needs it to reach vLLM. It must never travel further than that — a
       // client holding it could talk to the pod directly, outside the gateway,
       // with no usage record and no way to revoke it short of a rebuild.
@@ -493,10 +500,13 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps)
     const device = await requireDevice(request, reply)
     if (!device) return
 
-    const record = pods.current()
+    // Which pod, since several may be up. Without an explicit template this
+    // stops the newest, which is what a single-pod installation means by it.
+    const asked = (request.body as { templateId?: string } | undefined)?.templateId
+    const record = asked ? pods.currentFor(asked) : pods.current()
     const template = record ? pods.template(record.templateId) : null
     try {
-      await pods.stop(template?.lifecycleMode ?? 'recreate')
+      if (record) await pods.stop(record.templateId, template?.lifecycleMode ?? 'recreate')
       audit(device.id, 'pod.stop', { podId: record?.id }, request.ip)
       return reply.send({ stopped: record?.id ?? null })
     } catch (error) {
@@ -512,19 +522,73 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps)
   app.post('/client-tokens', async (request, reply) => {
     const device = await requireDevice(request, reply)
     if (!device) return
-    const name = (request.body as { name?: string } | undefined)?.name ?? 'Unnamed client'
-    const issued = tokens.issue('client_tokens', name)
-    audit(device.id, 'clientToken.issued', { id: issued.id, name }, request.ip)
+    const body = request.body as { name?: string; templateId?: string | null } | undefined
+    const name = body?.name ?? 'Unnamed client'
+
+    // The target is set at issue time so a new access is usable straight away.
+    // Unknown ids are refused rather than stored: a token pointing at a
+    // template that does not exist fails at the worst moment, on the first
+    // request, with nothing to explain it.
+    const templateId = body?.templateId ?? null
+    if (templateId && !pods.template(templateId)) {
+      return reply.code(400).send({ error: 'Unknown template' })
+    }
+
+    const issued = tokens.issue('client_tokens', name, templateId)
+    audit(device.id, 'clientToken.issued', { id: issued.id, name, templateId }, request.ip)
     // The only time this value is ever visible.
     return reply.code(201).send(issued)
   })
 
-  app.delete('/client-tokens/:id', async (request, reply) => {
+  /**
+   * Points an existing access at a template.
+   *
+   * Re-pointing here rather than at the client is the point of hanging the
+   * target on the token: the credential n8n holds stays valid, so moving it to
+   * other hardware needs no change on the n8n side at all.
+   */
+  app.patch('/client-tokens/:id', async (request, reply) => {
+    const device = await requireDevice(request, reply)
+    if (!device) return
+    const { id } = request.params as { id: string }
+    const templateId = (request.body as { templateId?: string | null } | undefined)?.templateId ?? null
+    if (templateId && !pods.template(templateId)) {
+      return reply.code(400).send({ error: 'Unknown template' })
+    }
+
+    const known = tokens.list('client_tokens').some((token) => token.id === id)
+    if (!known) return reply.code(404).send({ error: 'Unknown client token' })
+
+    tokens.assign(id, templateId)
+    audit(device.id, 'clientToken.assigned', { id, templateId }, request.ip)
+    return reply.send({ id, templateId })
+  })
+
+  /** Blocks an access. This is what stops it working. */
+  app.post('/client-tokens/:id/revoke', async (request, reply) => {
     const device = await requireDevice(request, reply)
     if (!device) return
     const { id } = request.params as { id: string }
     tokens.revoke('client_tokens', id)
     audit(device.id, 'clientToken.revoked', { id }, request.ip)
+    return reply.code(204).send()
+  })
+
+  /**
+   * Removes a blocked access from the list for good.
+   *
+   * Refused while it is still active, on purpose: tidying the list must not be
+   * the gesture that also cuts off a running client. Block it first, see that
+   * nothing broke, then remove it.
+   */
+  app.delete('/client-tokens/:id', async (request, reply) => {
+    const device = await requireDevice(request, reply)
+    if (!device) return
+    const { id } = request.params as { id: string }
+    if (!tokens.delete('client_tokens', id)) {
+      return reply.code(409).send({ error: 'Block this access first, then it can be removed.' })
+    }
+    audit(device.id, 'clientToken.deleted', { id }, request.ip)
     return reply.code(204).send()
   })
 }

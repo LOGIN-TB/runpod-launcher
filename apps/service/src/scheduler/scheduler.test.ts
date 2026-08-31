@@ -263,3 +263,79 @@ test('the scheduler leaves a hand-started pod alone until it has been used', asy
   assert.deepEqual(action, { do: 'nothing', because: 'manual-start' })
   assert.deepEqual(h.calls, [], 'nothing was stopped')
 })
+
+test('traffic on one pod does not keep another pod alive', async () => {
+  // The failure this guards against was already seen once in a simpler form: a
+  // fresh pod was killed after 64 seconds under a thirty-minute idle limit,
+  // because idleness was measured from the newest request across all pods
+  // rather than from this pod's own. With one pod per application the same bug
+  // inverts — a busy pod would hold every idle one open, billing all night.
+  const db = openDatabase(':memory:')
+  const key = loadOrCreateMasterKey(join(mkdtempSync(join(tmpdir(), 'sched-')), 'master.key'))
+  const settings = new SettingsStore(db, key)
+  settings.update({ runpodApiKey: 'rpa_test', timezone: 'Europe/Berlin' })
+
+  // Two templates, each with a five-minute idle limit and no schedule window,
+  // so idleness is the only thing that can stop either of them.
+  const busy = template({
+    id: 'busy',
+    name: 'busy',
+    schedule: { enabled: true, timezone: 'Europe/Berlin', weekdays: [1, 2, 3, 4, 5], startAt: '07:00', stopAt: '19:00', idleStopMinutes: 5, maxRuntimeHours: 0 },
+  })
+  const quiet = template({
+    id: 'quiet',
+    name: 'quiet',
+    schedule: { enabled: true, timezone: 'Europe/Berlin', weekdays: [1, 2, 3, 4, 5], startAt: '07:00', stopAt: '19:00', idleStopMinutes: 5, maxRuntimeHours: 0 },
+  })
+
+  const created = new Date(insideHours.getTime() - 60 * 60_000).toISOString()
+  for (const tpl of [busy, quiet]) {
+    db.prepare('INSERT INTO templates (id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .run(tpl.id, tpl.name, JSON.stringify(tpl), created, created)
+    // With an api_key, because `describeFor` needs it to reach the engine and
+    // nothing counts as idle until the engine actually answers.
+    db.prepare(
+      `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, started_at, started_by, api_key)
+       VALUES (?, ?, 'RUNNING', 0.5, ?, ?, 'scheduler', 'k')`,
+    ).run(`pod-${tpl.id}`, tpl.id, created, created)
+  }
+
+  // One request a minute ago, on the busy template only.
+  db.prepare('INSERT INTO usage (at, token_id, template_id, endpoint) VALUES (?, ?, ?, ?)').run(
+    new Date(insideHours.getTime() - 60_000).toISOString(),
+    'tok',
+    'busy',
+    '/v1/chat/completions',
+  )
+
+  const stopped: string[] = []
+  const fetchImpl = (async (url: unknown, init?: RequestInit) => {
+    const u = String(url)
+    if (u.includes('/billing/pods')) return json({ records: [] })
+    const action = /\/pods\/([^/]+)\/action$/.exec(u)
+    if (action) {
+      stopped.push(`${action[1]}:${JSON.parse(String(init?.body)).action}`)
+      return json({ id: action[1], status: 'EXITED', cost: 0.5, startedAt: null })
+    }
+    if (u.endsWith('/health')) return new Response('ok', { status: 200 })
+    return json({})
+  }) as unknown as typeof fetch
+  globalThis.fetch = fetchImpl
+
+  const runpod = (): RunpodClient => new RunpodClient('key', fetchImpl)
+  const pods = new PodManager(db, runpod, () => null)
+  const scheduler = new Scheduler(
+    db,
+    settings,
+    pods,
+    new SpendTracker(db, runpod, () => 'Europe/Berlin'),
+    { send: async () => {} },
+    silent,
+  )
+
+  await scheduler.tick(insideHours)
+
+  assert.deepEqual(stopped, ['pod-quiet:stop'], 'only the idle pod was stopped')
+  assert.ok(pods.currentFor('busy'), 'the busy pod is still up')
+  assert.equal(pods.currentFor('quiet'), null, 'and the idle one is not')
+})

@@ -61,7 +61,7 @@ test('an engine that keeps exiting is reported, not waited out', async () => {
   // said "retry shortly", for a pod that could never have come up.
   const manager = managerWith(CRASH_LOG)
   await assert.rejects(
-    () => manager.waitUntilServing('p1', 60_000),
+    () => manager.waitUntilServing('p1', 't1', 60_000),
     /keeps exiting on startup/,
   )
 })
@@ -69,6 +69,6 @@ test('an engine that keeps exiting is reported, not waited out', async () => {
 test('an engine that is merely slow is given its time', async () => {
   // One container start and no fatal error: still booting, not broken.
   const manager = managerWith(HEALTHY_LOG)
-  const serving = await manager.waitUntilServing('p1', 22_000)
+  const serving = await manager.waitUntilServing('p1', 't1', 22_000)
   assert.equal(serving, false, 'it never became healthy, but it was not called a crash either')
 })

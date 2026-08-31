@@ -36,7 +36,11 @@ export async function reapSupersededPods(
     templateId: string
   }>
 
-  const currentId = pods.current()?.id ?? null
+  // Every running pod, not just the newest one. While only one pod ever ran
+  // those were the same set; with one pod per application they are not, and
+  // protecting only the newest would have this terminate a pod that is serving
+  // somebody's requests right now.
+  const running = new Set(pods.runningPods().map((pod) => pod.id))
   const terminated: string[] = []
   const kept: string[] = []
 
@@ -44,7 +48,7 @@ export async function reapSupersededPods(
     // Already gone at RunPod: nothing to do, whatever our table says.
     if (!live.has(record.id)) continue
 
-    if (record.id === currentId) {
+    if (running.has(record.id)) {
       kept.push(record.id)
       continue
     }

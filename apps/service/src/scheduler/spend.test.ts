@@ -88,3 +88,33 @@ test('a stopped pod contributes nothing live', async () => {
   const snapshot = await tracker.snapshot(new Date('2026-09-15T12:00:00Z'))
   assert.equal(snapshot.estimatedUsd, 0)
 })
+
+test('two pods running cost twice as much, and the limit sees it', () => {
+  // The live estimate is what the daily and monthly brakes are compared
+  // against. Counting one pod when two are up reports half the spend, which
+  // quietly disables the brake exactly when it matters most.
+  const db = openDatabase(':memory:')
+  const now = new Date('2026-09-01T12:00:00Z')
+  const startedAt = new Date(now.getTime() - 2 * 3_600_000).toISOString()
+
+  db.prepare('INSERT INTO templates (id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+    .run('t1', 'a', '{}', startedAt, startedAt)
+
+  for (const [id, rate] of [
+    ['pod-a', 0.5],
+    ['pod-b', 0.8],
+  ] as const) {
+    db.prepare(
+      `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, started_at)
+       VALUES (?, 't1', 'RUNNING', ?, ?, ?)`,
+    ).run(id, rate, startedAt, startedAt)
+  }
+
+  const tracker = new SpendTracker(db, () => new RunpodClient('key', billing([])), () => 'UTC')
+
+  return tracker.snapshot(now).then((snapshot) => {
+    // Two hours at $0.50 plus two hours at $0.80.
+    assert.equal(Math.round(snapshot.estimatedUsd * 100) / 100, 2.6)
+    assert.equal(Math.round(snapshot.todayUsd * 100) / 100, 2.6)
+  })
+})

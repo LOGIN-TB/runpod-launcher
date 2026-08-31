@@ -55,6 +55,21 @@ export const errors = {
       'model_loading',
     ),
 
+  /**
+   * The token is valid but points at nothing.
+   *
+   * Reached only on an installation that already had several templates when
+   * targets were introduced, where binding the token to one of them would have
+   * been a guess — and a wrong guess starts somebody else's GPU.
+   */
+  unassigned: (clientName: string) =>
+    openAiError(
+      `The access token "${clientName}" is not assigned to a template yet. ` +
+        'Open Mappings in the launcher app and pick the pod this application should use.',
+      'invalid_request_error',
+      'client_unassigned',
+    ),
+
   noPod: () =>
     openAiError(
       'No pod exists yet. Start one from the launcher app, or pick a template with a schedule.',
