@@ -120,10 +120,11 @@ test('RunPod rejecting a redundant start is agreement, not failure', async () =>
   const now = new Date().toISOString()
   db.prepare('INSERT INTO templates (id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
     .run(scheduled.id, scheduled.name, JSON.stringify(scheduled), now, now)
+  // Paused, which is the only state from which a resume is attempted.
   db.prepare(
-    `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, started_at)
-     VALUES ('p9', ?, 'EXITED', 0.5, ?, ?)`,
-  ).run(scheduled.id, now, now)
+    `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, started_at, stopped_at)
+     VALUES ('p9', ?, 'EXITED', 0.5, ?, ?, ?)`,
+  ).run(scheduled.id, now, now, now)
 
   const conflicting = (async (url: unknown) => {
     const u = String(url)

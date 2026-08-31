@@ -52,6 +52,7 @@ export const en = {
   'activity.started': '{by} started {template}',
   'activity.stopped': '{by} stopped the pod',
   'activity.stoppedBecause': '{by} stopped the pod — {reason}',
+  'activity.superseded': 'A pod that had been replaced was cleared away',
   'activity.deleted': '{by} deleted a pod',
   'activity.templateCreated': 'Template {name} created',
   'activity.templateDeleted': 'Template {name} deleted',

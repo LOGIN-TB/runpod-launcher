@@ -102,11 +102,22 @@ export class PodManager {
     }
   }
 
+  /**
+   * The pod the launcher considers live.
+   *
+   * Terminal statuses are excluded even when nothing has set `stopped_at` yet.
+   * That combination does occur — RunPod reports a pod as finished before
+   * anything here marks it stopped — and reading it as live made the launcher
+   * hand back a dead pod as the running one and never try to start anything.
+   */
   current(): PodRecord | null {
     const row = this.db
       .prepare(
         `SELECT id, template_id AS templateId, status, cost_per_hour AS costPerHour
-         FROM pods WHERE stopped_at IS NULL ORDER BY created_at DESC LIMIT 1`,
+         FROM pods
+         WHERE stopped_at IS NULL
+           AND status NOT IN ('EXITED', 'TERMINATED', 'ERROR')
+         ORDER BY created_at DESC LIMIT 1`,
       )
       .get() as PodRecord | undefined
     return row ?? null
@@ -168,11 +179,21 @@ export class PodManager {
 
   private async doStart(template: Template): Promise<PodRecord> {
     const client = this.runpod()
-    const existing = this.current()
 
-    if (existing && template.lifecycleMode === 'stopResume') {
-      const resumed = await this.tryResume(client, existing.id, template.id)
+    // Whatever is already up wins: there is nothing to start.
+    const running = this.current()
+    if (running) return running
+
+    const paused = template.lifecycleMode === 'stopResume' ? this.resumable(template.id) : null
+    if (paused) {
+      const resumed = await this.tryResume(client, paused.id, template.id)
       if (resumed) return resumed
+
+      // Resuming failed — the host has no free GPU, or the pod is gone. A new
+      // one is built below, and this one must go with it: left alone it stays
+      // at RunPod forever, indistinguishable from the live pod in the list and
+      // billing for its disk if the template uses a volume.
+      await this.act(paused.id, 'terminate', 'superseded').catch(() => undefined)
     }
 
     const podApiKey = generateToken()
@@ -257,7 +278,10 @@ export class PodManager {
       pod = await client.podAction(podId, 'start')
     } catch (error) {
       if (error instanceof RunpodError && error.status === 404) {
-        this.markStopped(podId)
+        // Gone at RunPod, so it can never be resumed. Recording it as merely
+        // stopped would leave it as a candidate forever.
+        this.markStopped(podId, 'vanished')
+        this.db.prepare('UPDATE pods SET terminated_at = ? WHERE id = ?').run(new Date().toISOString(), podId)
         return null
       }
       // The host gave the card away while the pod was paused. Nothing is wrong
@@ -314,9 +338,10 @@ export class PodManager {
   async stop(mode: Template['lifecycleMode'], reason = 'manual'): Promise<void> {
     const existing = this.current()
     if (!existing) return
-    const client = this.runpod()
-    await client.podAction(existing.id, mode === 'stopResume' ? 'stop' : 'terminate')
-    this.markStopped(existing.id, reason)
+    // Through `act` rather than around it, so that terminating also records the
+    // pod as gone. Recorded only as stopped, a terminated pod stayed a
+    // candidate for resuming forever.
+    await this.act(existing.id, mode === 'stopResume' ? 'stop' : 'terminate', reason)
   }
 
   /**
@@ -391,6 +416,42 @@ export class PodManager {
       await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS))
     }
     return null
+  }
+
+  /**
+   * Pod ids RunPod actually still has, or null if it could not be asked.
+   *
+   * Null rather than an empty set on failure: an empty set would read as "RunPod
+   * has nothing", and anything acting on that would conclude every pod is
+   * already gone.
+   */
+  async listLiveIds(): Promise<Set<string> | null> {
+    try {
+      const { pods } = await this.runpod().listPods()
+      return new Set(pods.map((pod) => pod.id))
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * The pod this template could be woken from, if there is one.
+   *
+   * Deliberately not `current()`: that one asks for `stopped_at IS NULL`, which
+   * by definition excludes the pod we want to resume. `doStart` used it anyway,
+   * so the resume branch was unreachable and every start built a new pod — and
+   * "pause and resume" had never once resumed.
+   */
+  resumable(templateId: string): PodRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT id, template_id AS templateId, status, cost_per_hour AS costPerHour
+         FROM pods
+         WHERE template_id = ? AND stopped_at IS NOT NULL AND terminated_at IS NULL
+         ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(templateId) as PodRecord | undefined
+    return row ?? null
   }
 
   /**
@@ -514,6 +575,11 @@ export class PodManager {
       if (!benign) throw error
     }
     this.markStopped(podId, reason)
+    if (action === 'terminate') {
+      this.db
+        .prepare('UPDATE pods SET terminated_at = ? WHERE id = ?')
+        .run(new Date().toISOString(), podId)
+    }
   }
 
   /**

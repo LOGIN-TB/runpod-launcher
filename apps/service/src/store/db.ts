@@ -94,6 +94,17 @@ const MIGRATIONS: readonly string[] = [
   // instruction for now; the schedule is for when nobody is watching, and it
   // should not overrule the person who is.
   `ALTER TABLE pods ADD COLUMN started_by TEXT NOT NULL DEFAULT 'user';`,
+  // Paused and gone are different states, and only one of them can be resumed.
+  //
+  // Without the distinction the launcher could not find the pod it was supposed
+  // to wake, so it built a new one every time and left the old behind. Three
+  // pods for one template after a single evening.
+  `ALTER TABLE pods ADD COLUMN terminated_at TEXT;`,
+  // Pods stopped before this column existed are left with `terminated_at` unset
+  // on purpose. Marking them gone would be safe for the resume decision but
+  // would also hide them from the reaper, which then leaves them standing at
+  // RunPod forever — the very pile-up this column exists to end. The reaper
+  // reconciles against RunPod's real list and settles it there.
 ]
 
 export function openDatabase(path: string): Db {

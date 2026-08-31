@@ -57,6 +57,7 @@ export const de = {
   'activity.started': '{by} hat {template} gestartet',
   'activity.stopped': '{by} hat den Pod gestoppt',
   'activity.stoppedBecause': '{by} hat den Pod gestoppt — {reason}',
+  'activity.superseded': 'Ein ersetzter Pod wurde aufgeräumt',
   'activity.deleted': '{by} hat einen Pod gelöscht',
   'activity.templateCreated': 'Vorlage {name} angelegt',
   'activity.templateDeleted': 'Vorlage {name} gelöscht',

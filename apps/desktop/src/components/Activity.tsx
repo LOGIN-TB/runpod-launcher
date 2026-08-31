@@ -54,7 +54,11 @@ function describe(event: ActivityEvent, t: (key: MessageKey, vars?: Record<strin
       // window closed" and "it crashed" look identical without it.
       return reason ? t('activity.stoppedBecause', { by, reason }) : t('activity.stopped', { by })
     case 'pod.terminate':
-      return t('activity.deleted', { by })
+      // A pod cleared away automatically needs saying so; otherwise it looks
+      // as though something deleted it for no reason.
+      return event.detail?.reason === 'superseded'
+        ? t('activity.superseded')
+        : t('activity.deleted', { by })
     case 'template.created':
       return t('activity.templateCreated', { name })
     case 'template.deleted':

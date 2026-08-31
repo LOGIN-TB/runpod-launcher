@@ -131,10 +131,12 @@ test('a pod deleted outside the launcher is replaced, not resumed into a 404', a
   const tpl = template({ lifecycleMode: 'stopResume' })
   db.prepare('INSERT INTO templates (id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
     .run('t1', 'test', JSON.stringify(tpl), now, now)
-  // A pod the launcher still believes in, which no longer exists at RunPod —
-  // what happens when someone terminates it from RunPod's own console.
-  db.prepare('INSERT INTO pods (id, template_id, status, cost_per_hour, created_at) VALUES (?, ?, ?, ?, ?)')
-    .run('ghost-pod', 't1', 'EXITED', 0.99, now)
+  // A paused pod the launcher still believes in, which no longer exists at
+  // RunPod — what happens when someone terminates it from RunPod's own console.
+  db.prepare(
+    `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, stopped_at)
+     VALUES ('ghost-pod', 't1', 'EXITED', 0.99, ?, ?)`,
+  ).run(now, now)
 
   const manager = new PodManager(db, () => new RunpodClient('key', fetchWithVanishedPod(created)), () => null)
   const record = await manager.start(tpl)

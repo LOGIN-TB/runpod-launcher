@@ -3,6 +3,7 @@ import type { Db } from '../store/db.js'
 import type { SettingsStore } from '../store/settings.js'
 import type { PodManager } from '../pods/manager.js'
 import { decide, type Action, type PodState } from './decide.js'
+import { reapSupersededPods } from '../pods/reaper.js'
 import type { SpendTracker } from './spend.js'
 import type { NotificationSink } from './notify.js'
 
@@ -91,6 +92,12 @@ export class Scheduler {
   }
 
   private async runOnce(now: Date): Promise<Action | null> {
+    // Cheap when there is nothing to do, and it catches pods left behind by an
+    // earlier version or by a start that failed halfway.
+    await reapSupersededPods(this.db, this.pods, (message, detail) => this.log.info(detail, message)).catch(
+      (error: unknown) => this.log.warn({ error: (error as Error).message }, 'reaping pods failed'),
+    )
+
     // Credentials arrive after the service is already up: the user pairs first,
     // then types the key. Checking here rather than at boot is what stops the
     // schedule from silently doing nothing until the next container restart.

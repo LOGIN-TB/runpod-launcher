@@ -16,6 +16,7 @@ import { SpendTracker } from './scheduler/spend.js'
 import { Notifier } from './scheduler/notify.js'
 import { Scheduler } from './scheduler/scheduler.js'
 import { InFlight } from './gateway/inflight.js'
+import { reapSupersededPods } from './pods/reaper.js'
 import { isInsideWindow } from './scheduler/decide.js'
 
 const config = loadConfig()
@@ -143,6 +144,15 @@ app.log.info({ address, tlsMode: config.tlsMode }, 'launcher service listening')
 // created on day one would not run until the container was restarted.
 scheduler.start()
 app.log.info({}, 'scheduler running')
+
+// Clears away pods left behind before this version existed. The scheduler does
+// the same on every tick; doing it at startup means a long-stopped launcher
+// tidies up immediately rather than a minute later.
+if (settings.secret('runpodApiKey')) {
+  void reapSupersededPods(db, pods, (message, detail) => app.log.info(detail, message)).catch(
+    (error: unknown) => app.log.warn({ error: (error as Error).message }, 'reaping pods failed'),
+  )
+}
 
 if (!pairing.hasPairedDevice()) {
   // Printed plainly rather than through the structured logger: this is the one
