@@ -21,11 +21,11 @@ test('no message is left in English by accident in the German locale', () => {
 })
 
 test('placeholders are filled, and unknown ones left visible', () => {
-  assert.equal(translate('en', 'pod.costPerHour', { amount: '$0.99' }), '$0.99 per hour')
-  assert.equal(translate('de', 'pod.costPerHour', { amount: '0,99 $' }), '0,99 $ pro Stunde')
+  assert.equal(translate('en', 'pods.runCost', { amount: '$0.99' }), '$0.99 so far')
+  assert.equal(translate('de', 'pods.runCost', { amount: '0,99 $' }), '0,99 $ bisher')
   // A missing variable stays as {name} rather than becoming "undefined", so the
   // gap is obvious in a screenshot instead of reading like a real value.
-  assert.match(translate('en', 'pod.costPerHour', {}), /\{amount\}/)
+  assert.match(translate('en', 'pods.runCost', {}), /\{amount\}/)
 })
 
 test('every placeholder in English also exists in German', () => {

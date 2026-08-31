@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import type { MessageKey } from '@runpod-launcher/i18n'
-import { api, type Connection, type ScheduleAction, type SpendSnapshot } from '../lib/api.js'
+import type { PublicSettings } from '@runpod-launcher/shared'
+import { api, type Connection, type ScheduledDecision, type SpendSnapshot } from '../lib/api.js'
 import { useI18n } from '../lib/i18n.js'
 import { Card } from './primitives.js'
 
@@ -17,18 +18,24 @@ const POLL_MS = 30_000
 export function SpendPanel({ connection }: { connection: Connection }): ReactNode {
   const { t, money } = useI18n()
   const [spend, setSpend] = useState<SpendSnapshot | null>(null)
-  const [action, setAction] = useState<ScheduleAction | null>(null)
+  // One entry per template now: each application's pod has its own schedule,
+  // so showing a single next action would hide the others.
+  const [decisions, setDecisions] = useState<ScheduledDecision[]>([])
+  /** The guards themselves, not just how close the spend is to them. */
+  const [settings, setSettings] = useState<PublicSettings | null>(null)
 
   useEffect(() => {
     let cancelled = false
     const load = async (): Promise<void> => {
-      const [nextSpend, preview] = await Promise.all([
+      const [nextSpend, preview, nextSettings] = await Promise.all([
         api.spend(connection).catch(() => null),
         api.schedulePreview(connection).catch(() => null),
+        api.settings(connection).catch(() => null),
       ])
       if (cancelled) return
       if (nextSpend) setSpend(nextSpend)
-      setAction(preview?.action ?? null)
+      if (nextSettings) setSettings(nextSettings)
+      setDecisions(preview?.actions ?? [])
     }
     void load()
     const timer = setInterval(load, POLL_MS)
@@ -63,9 +70,47 @@ export function SpendPanel({ connection }: { connection: Connection }): ReactNod
         <p className="muted small">{t('cost.estimated', { amount: money(spend.estimatedUsd) })}</p>
       ) : null}
 
-      {action ? (
-        <p className="muted small">
-          <strong>{t('schedule.nextAction')}: </strong>
+      {/* The guards themselves, spelled out.
+          Reading them off the amounts above only works while a limit exists;
+          with none set, the interesting fact is that nothing would stop a pod
+          left running, and that deserves saying rather than a dash. */}
+      <table className="recipes">
+        <tbody>
+          <tr>
+            <th scope="row">{t('cost.dailyLimit')}</th>
+            <td>
+              {spend.dailyLimitUsd === null ? (
+                <span className="field-error">{t('cost.limitUnset')}</span>
+              ) : (
+                money(spend.dailyLimitUsd)
+              )}
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">{t('cost.monthlyLimit')}</th>
+            <td>
+              {spend.monthlyLimitUsd === null ? (
+                <span className="field-error">{t('cost.limitUnset')}</span>
+              ) : (
+                money(spend.monthlyLimitUsd)
+              )}
+            </td>
+          </tr>
+          {settings ? (
+            <tr>
+              <th scope="row">{t('settings.maxPods')}</th>
+              <td>{settings.maxConcurrentPods}</td>
+            </tr>
+          ) : null}
+        </tbody>
+      </table>
+
+      {decisions.map(({ templateId, templateName, action }) => (
+        <p className="muted small" key={templateId}>
+          <strong>
+            {decisions.length > 1 ? `${templateName} — ` : ''}
+            {t('schedule.nextAction')}:{' '}
+          </strong>
           {action.do === 'start'
             ? t('schedule.willStart')
             : action.do === 'stop'
@@ -74,7 +119,7 @@ export function SpendPanel({ connection }: { connection: Connection }): ReactNod
           {' — '}
           {t(`schedule.reason.${action.because}` as MessageKey)}
         </p>
-      ) : null}
+      ))}
     </Card>
   )
 }

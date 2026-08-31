@@ -1,8 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import type { Template } from '@runpod-launcher/shared'
 import { api, type ClientToken, type Connection } from '../lib/api.js'
 import { useI18n } from '../lib/i18n.js'
 import { Badge, Button, Card, EmptyState, Field, Input } from '../components/primitives.js'
 import { CopyField } from '../components/CopyField.js'
+import { Confirm } from '../components/Confirm.js'
 
 /**
  * Client tokens, and the recipes for using them.
@@ -14,12 +16,24 @@ import { CopyField } from '../components/CopyField.js'
 export function Clients({ connection }: { connection: Connection }): ReactNode {
   const { t } = useI18n()
   const [tokens, setTokens] = useState<ClientToken[]>([])
+  const [templates, setTemplates] = useState<Template[]>([])
   const [name, setName] = useState('')
+  // The pod this access will reach. Asked at creation so a new access works on
+  // its first request instead of being refused for having no target.
+  const [target, setTarget] = useState('')
   const [issued, setIssued] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // `window.confirm` does nothing in a Tauri webview, so removals ask here.
+  const [pendingDelete, setPendingDelete] = useState<ClientToken | null>(null)
 
   const reload = async (): Promise<void> => {
-    setTokens((await api.clientTokens(connection)).tokens)
+    const [tokenList, templateList] = await Promise.all([
+      api.clientTokens(connection),
+      api.templates(connection),
+    ])
+    setTokens(tokenList.tokens)
+    setTemplates(templateList.templates)
+    setTarget((current) => current || (templateList.templates[0]?.id ?? ''))
   }
   useEffect(() => {
     void reload()
@@ -28,7 +42,11 @@ export function Clients({ connection }: { connection: Connection }): ReactNode {
   const create = async (): Promise<void> => {
     setBusy(true)
     try {
-      const { token } = await api.createClientToken(connection, name || 'Unnamed client')
+      const { token } = await api.createClientToken(
+        connection,
+        name || 'Unnamed client',
+        target || null,
+      )
       setIssued(token)
       setName('')
       await reload()
@@ -38,6 +56,13 @@ export function Clients({ connection }: { connection: Connection }): ReactNode {
   }
 
   const endpoint = new URL('/v1', connection.baseUrl).toString()
+  const modelsOf = (templateId: string | null): string[] => {
+    const template = templates.find((candidate) => candidate.id === templateId)
+    if (!template) return []
+    return [template.chatModel, template.embeddingModel]
+      .filter((slot): slot is NonNullable<typeof slot> => slot !== null)
+      .map((slot) => slot.servedName ?? slot.repoId)
+  }
 
   return (
     <div className="stack">
@@ -45,6 +70,10 @@ export function Clients({ connection }: { connection: Connection }): ReactNode {
         <h2>{t('clients.title')}</h2>
         <p className="muted">{t('clients.intro')}</p>
 
+        {/* Two fields of equal height on one line, then the hint, then the
+            action. A hint inside one field of a row lifts that field's control
+            above its neighbour's and drags the button down with it — which is
+            exactly how this row came out crooked. */}
         <div className="row">
           <Field label={t('clients.name')}>
             <Input
@@ -53,7 +82,25 @@ export function Clients({ connection }: { connection: Connection }): ReactNode {
               placeholder={t('clients.namePlaceholder')}
             />
           </Field>
-          <Button variant="primary" loading={busy} onClick={create}>
+          <Field label={t('clients.target')}>
+            <select
+              className="input"
+              value={target}
+              onChange={(event) => setTarget(event.target.value)}
+            >
+              {templates.map((template) => (
+                <option key={template.id} value={template.id}>
+                  {template.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+
+        <p className="muted small">{t('clients.targetHint')}</p>
+
+        <div className="row end">
+          <Button variant="primary" loading={busy} disabled={templates.length === 0} onClick={create}>
             {t('clients.new')}
           </Button>
         </div>
@@ -87,28 +134,73 @@ export function Clients({ connection }: { connection: Connection }): ReactNode {
                       : t('clients.neverUsed')}
                   </span>
                 </div>
-                {token.revokedAt ? (
-                  <Badge tone="stopped">{t('clients.revoked')}</Badge>
-                ) : (
-                  <Button
-                    variant="ghost"
-                    onClick={async () => {
-                      await api.revokeClientToken(connection, token.id)
-                      await reload()
-                    }}
-                  >
-                    {t('clients.revoke')}
-                  </Button>
-                )}
+
+                {/* Both states put their controls in one group, so the rows
+                    line up on the right edge whatever they contain. */}
+                <div className="token-actions">
+                  {/* Re-pointing here changes nothing on the client's side: the
+                      credential it holds stays valid. */}
+                  {token.revokedAt ? (
+                    <>
+                      <Badge tone="stopped">{t('clients.revoked')}</Badge>
+                      {/* Only once it is blocked. Removing an active access
+                          would make tidying the list into an outage. */}
+                      <Button variant="danger" onClick={() => setPendingDelete(token)}>
+                        {t('clients.delete')}
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <select
+                        className="input"
+                        value={token.templateId ?? ''}
+                        onChange={async (event) => {
+                          await api.assignClientToken(connection, token.id, event.target.value || null)
+                          await reload()
+                        }}
+                      >
+                        <option value="">{t('clients.unassigned')}</option>
+                        {templates.map((template) => (
+                          <option key={template.id} value={template.id}>
+                            {template.name}
+                          </option>
+                        ))}
+                      </select>
+                      <Button
+                        variant="ghost"
+                        onClick={async () => {
+                          await api.revokeClientToken(connection, token.id)
+                          await reload()
+                        }}
+                      >
+                        {t('clients.revoke')}
+                      </Button>
+                    </>
+                  )}
+                </div>
               </li>
             ))}
           </ul>
         </Card>
       )}
 
+      <Confirm
+        open={pendingDelete !== null}
+        title={t('clients.deleteTitle')}
+        body={t('clients.deleteBody', { name: pendingDelete?.name ?? '' })}
+        danger
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={async () => {
+          const target = pendingDelete
+          setPendingDelete(null)
+          if (target) await api.deleteClientToken(connection, target.id)
+          await reload()
+        }}
+      />
+
       <Card>
         <h3>{t('clients.recipe')}</h3>
-        <ConnectionRecipes endpoint={endpoint} />
+        <ConnectionRecipes endpoint={endpoint} models={modelsOf(target || null)} />
       </Card>
     </div>
   )
@@ -118,7 +210,7 @@ export function Clients({ connection }: { connection: Connection }): ReactNode {
  * Where to paste the address in each tool. Deliberately not n8n-only: the
  * endpoint is ordinary OpenAI, and an agent framework is as valid a client.
  */
-function ConnectionRecipes({ endpoint }: { endpoint: string }): ReactNode {
+function ConnectionRecipes({ endpoint, models }: { endpoint: string; models: string[] }): ReactNode {
   const recipes: Array<{ client: string; where: string }> = [
     { client: 'n8n', where: 'OpenAI credential → Base URL' },
     { client: 'Open WebUI', where: 'Settings → Connections → OpenAI API' },
@@ -130,6 +222,11 @@ function ConnectionRecipes({ endpoint }: { endpoint: string }): ReactNode {
   return (
     <>
       <CopyField value={endpoint} />
+      {/* The model name belongs to the selected template. Naming any other
+          would have the client ask for something its pod does not serve. */}
+      {models.map((model) => (
+        <CopyField key={model} value={model} />
+      ))}
       <table className="recipes">
         <tbody>
           {recipes.map((recipe) => (

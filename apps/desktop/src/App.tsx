@@ -7,11 +7,12 @@ import { Pairing } from './screens/Pairing.js'
 import { Overview } from './screens/Overview.js'
 import { Templates } from './screens/Templates.js'
 import { Clients } from './screens/Clients.js'
+import { Mappings } from './screens/Mappings.js'
 import { Settings } from './screens/Settings.js'
 import { Help } from './screens/Help.js'
 import { Setup } from './screens/Setup.js'
 
-type Screen = 'overview' | 'templates' | 'clients' | 'settings' | 'help'
+type Screen = 'overview' | 'templates' | 'clients' | 'mappings' | 'settings' | 'help'
 
 export function App(): ReactNode {
   const { t } = useI18n()
@@ -62,6 +63,7 @@ export function App(): ReactNode {
     { id: 'overview', label: t('nav.overview') },
     { id: 'templates', label: t('nav.templates') },
     { id: 'clients', label: t('nav.clients') },
+    { id: 'mappings', label: t('nav.mappings') },
     { id: 'settings', label: t('nav.settings') },
     { id: 'help', label: t('nav.help') },
   ]
@@ -97,6 +99,7 @@ export function App(): ReactNode {
           <Templates connection={connection} templates={templates} onChanged={reloadTemplates} />
         ) : null}
         {screen === 'clients' ? <Clients connection={connection} /> : null}
+        {screen === 'mappings' ? <Mappings connection={connection} /> : null}
         {screen === 'settings' ? <Settings connection={connection} /> : null}
         {screen === 'help' ? <Help /> : null}
       </main>

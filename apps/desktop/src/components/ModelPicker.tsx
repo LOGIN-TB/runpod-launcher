@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import { chooseVariant } from '@runpod-launcher/shared'
 import { api, type Connection, type GpuType, type ModelHit, type ModelVerdict } from '../lib/api.js'
 import { useI18n } from '../lib/i18n.js'
 import { Badge, Field, Input } from './primitives.js'
@@ -21,6 +22,7 @@ export function ModelPicker({
   gpu,
   otherSlotBytes,
   value,
+  quantisation,
   onChange,
 }: {
   connection: Connection
@@ -29,6 +31,15 @@ export function ModelPicker({
   gpu: GpuType | null
   otherSlotBytes: number
   value: string
+  /**
+   * The build already saved on this template, if any.
+   *
+   * Without it the picker started empty and then adopted whichever build the
+   * service would have suggested — so opening a template for editing showed the
+   * first entry in the list rather than the Q4 or Q8 that was actually chosen,
+   * and saving quietly changed the model.
+   */
+  quantisation?: string | null
   onChange: (repoId: string, verdict: ModelVerdict | null, quantisation: string | null) => void
 }): ReactNode {
   const { t, number } = useI18n()
@@ -36,8 +47,9 @@ export function ModelPicker({
   const [hits, setHits] = useState<ModelHit[]>([])
   const [verdict, setVerdict] = useState<ModelVerdict | null>(null)
   const [checking, setChecking] = useState(false)
-  // Which build of a GGUF repository to load. Null until one is offered.
-  const [variant, setVariant] = useState<string | null>(null)
+  // Which build of a GGUF repository to load. Seeded from what the template
+  // already carries; null when there is nothing saved yet.
+  const [variant, setVariant] = useState<string | null>(quantisation ?? null)
 
   // A repository id is recognisable on sight, so pasting one skips the search
   // entirely and goes straight to the compatibility check.
@@ -78,9 +90,11 @@ export function ModelPicker({
         .then((result) => {
           if (cancelled) return
           setVerdict(result)
-          // Adopt the default the service picked, so the dropdown shows what
-          // was actually sized rather than an empty selection.
-          const chosen = variant ?? defaultVariantOf(result)
+          // Keeps the saved build while the repository still offers it, and
+          // falls back to the largest otherwise. Tested next door in
+          // `packages/shared`, because this is where the choice was silently
+          // being replaced.
+          const chosen = chooseVariant(variant, result.details.ggufVariants, defaultVariantOf(result))
           if (chosen !== variant) setVariant(chosen)
           onChange(query.trim(), result, chosen)
         })

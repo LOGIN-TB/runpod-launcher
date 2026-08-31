@@ -50,6 +50,8 @@ async function request<T>(connection: Connection, path: string, init: RequestIni
 export interface PodView {
   pod: { id: string; templateId: string; status: string; costPerHour: number } | null
   serving: { chatUrl: string | null; embeddingUrl: string | null; servedModels: string[] } | null
+  /** Whether a pod has ever been created here — not whether one is up now. */
+  everStarted: boolean
 }
 
 export interface GpuType {
@@ -77,6 +79,11 @@ export interface ModelVerdict {
     format: string
     gated: boolean
     ggufVariants?: Array<{ label: string; variant: string; qualifier: string | null; bytes: number; files: string[] }>
+    /** vLLM parsers this model needs, read from its own chat template. */
+    toolCallParser?: string | null
+    reasoningParser?: string | null
+    /** The longest context the model itself supports, whatever the card allows. */
+    nativeContextTokens?: number | null
   }
   compatible: boolean
   problems: Problem[]
@@ -95,6 +102,13 @@ export interface SpendSnapshot {
 export interface ScheduleAction {
   do: 'start' | 'stop' | 'nothing'
   because: string
+}
+
+/** What the schedule would do to one template, and why. */
+export interface ScheduledDecision {
+  templateId: string
+  templateName: string
+  action: ScheduleAction
 }
 
 export type Readiness = 'provisioning' | 'preparing' | 'ready' | 'failed' | 'stopped'
@@ -133,6 +147,8 @@ export interface ClientToken {
   createdAt: string
   lastUsedAt: string | null
   revokedAt: string | null
+  /** The template this access reaches, or null while it is unassigned. */
+  templateId: string | null
 }
 
 export const api = {
@@ -160,10 +176,15 @@ export const api = {
   createTemplate: (c: Connection, template: Record<string, unknown>) =>
     request<Template>(c, '/templates', { method: 'POST', body: JSON.stringify(template) }),
 
-  pod: (c: Connection) => request<PodView>(c, '/pod'),
+  pod: (c: Connection, templateId?: string) =>
+    request<PodView>(c, templateId ? `/pod?templateId=${encodeURIComponent(templateId)}` : '/pod'),
   startPod: (c: Connection, templateId: string) =>
     request<{ id: string }>(c, '/pod/start', { method: 'POST', body: JSON.stringify({ templateId }) }),
-  stopPod: (c: Connection) => request<{ stopped: string | null }>(c, '/pod/stop', { method: 'POST', body: '{}' }),
+  stopPod: (c: Connection, templateId?: string) =>
+    request<{ stopped: string | null }>(c, '/pod/stop', {
+      method: 'POST',
+      body: JSON.stringify(templateId ? { templateId } : {}),
+    }),
 
   pods: (c: Connection) => request<{ pods: PodStatusReport[] }>(c, '/pods'),
   activity: (c: Connection) => request<{ events: ActivityEvent[] }>(c, '/activity'),
@@ -171,8 +192,11 @@ export const api = {
     request<{ id: string }>(c, `/pods/${id}/start`, { method: 'POST', body: '{}' }),
   stopOnePod: (c: Connection, id: string) => request<unknown>(c, `/pods/${id}/stop`, { method: 'POST', body: '{}' }),
   deletePod: (c: Connection, id: string) => request<void>(c, `/pods/${id}`, { method: 'DELETE' }),
-  selectPod: (c: Connection, id: string) => request<unknown>(c, `/pods/${id}/select`, { method: 'POST', body: '{}' }),
-  selfTest: (c: Connection) => request<SelfTestResult>(c, '/pod/selftest', { method: 'POST', body: '{}' }),
+  selfTest: (c: Connection, templateId?: string) =>
+    request<SelfTestResult>(c, '/pod/selftest', {
+      method: 'POST',
+      body: JSON.stringify(templateId ? { templateId } : {}),
+    }),
   updateTemplate: (c: Connection, id: string, template: Record<string, unknown>) =>
     request<Template & { appliesToNextPod: boolean }>(c, `/templates/${id}`, {
       method: 'PUT',
@@ -183,7 +207,7 @@ export const api = {
   gpus: (c: Connection) => request<{ gpus: GpuType[] }>(c, '/catalog/gpus'),
 
   spend: (c: Connection) => request<SpendSnapshot>(c, '/spend'),
-  schedulePreview: (c: Connection) => request<{ action: ScheduleAction | null }>(c, '/schedule/preview'),
+  schedulePreview: (c: Connection) => request<{ actions: ScheduledDecision[] }>(c, '/schedule/preview'),
 
   searchModels: (c: Connection, q: string, kind: 'chat' | 'embedding') =>
     request<{ models: ModelHit[] }>(c, `/models/search?q=${encodeURIComponent(q)}&kind=${kind}`),
@@ -191,11 +215,20 @@ export const api = {
     request<ModelVerdict>(c, '/models/evaluate', { method: 'POST', body: JSON.stringify(body) }),
 
   clientTokens: (c: Connection) => request<{ tokens: ClientToken[] }>(c, '/client-tokens'),
-  createClientToken: (c: Connection, name: string) =>
+  createClientToken: (c: Connection, name: string, templateId: string | null) =>
     request<{ id: string; token: string }>(c, '/client-tokens', {
       method: 'POST',
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, templateId }),
+    }),
+  /** Points an existing access at another template, without touching the client. */
+  assignClientToken: (c: Connection, id: string, templateId: string | null) =>
+    request<{ id: string; templateId: string | null }>(c, `/client-tokens/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ templateId }),
     }),
   revokeClientToken: (c: Connection, id: string) =>
+    request<void>(c, `/client-tokens/${id}/revoke`, { method: 'POST', body: '{}' }),
+  /** Only for an access that is already blocked; the service refuses otherwise. */
+  deleteClientToken: (c: Connection, id: string) =>
     request<void>(c, `/client-tokens/${id}`, { method: 'DELETE' }),
 }

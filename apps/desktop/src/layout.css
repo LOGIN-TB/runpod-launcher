@@ -48,6 +48,8 @@
 .stack { display: flex; flex-direction: column; gap: var(--space-4); }
 .row { display: flex; gap: var(--space-3); align-items: flex-end; flex-wrap: wrap; }
 .row.space-between { justify-content: space-between; align-items: center; }
+/* An action on its own line, under the fields it applies to. */
+.row.end { justify-content: flex-end; }
 
 .card {
   background: var(--bg-raised);
@@ -65,20 +67,7 @@
 .small { font-size: var(--text-sm); }
 
 /* --- the overview's one loud element --- */
-.pod-header { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-4); }
-.pod-header > div:first-child { display: flex; flex-direction: column; gap: var(--space-2); align-items: flex-start; }
-.pod-controls { display: flex; gap: var(--space-3); }
-.pod-controls .input { flex: 1; }
 
-.cost { text-align: right; }
-.cost-amount {
-  display: block;
-  font-size: var(--text-2xl);
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  line-height: 1;
-}
-.cost-label { font-size: var(--text-xs); color: var(--text-muted); }
 
 /* --- form controls --- */
 .field { display: flex; flex-direction: column; gap: var(--space-1); flex: 1; min-width: 12rem; }
@@ -88,12 +77,26 @@
 
 .input {
   font: inherit;
+  /* Stated rather than inherited, because a `select` and an `input` compute
+     different line boxes from the same font: side by side, one sat five pixels
+     shorter than the other. */
+  line-height: 1.5;
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   background: var(--bg-raised);
   color: var(--text);
   width: 100%;
+}
+/* Safari draws a select with its own inner padding that CSS cannot reach, so
+   the box is normalised here — which means drawing the arrow ourselves, or the
+   field stops looking like something you can open. */
+select.input {
+  appearance: none;
+  padding-right: var(--space-6);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5l5-5' fill='none' stroke='%23888' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--space-3) center;
 }
 .input:hover { border-color: var(--text-faint); }
 
@@ -189,6 +192,11 @@
 .token-list li { display: flex; justify-content: space-between; align-items: center; padding: var(--space-3) 0; gap: var(--space-3); }
 .token-list li + li { border-top: 1px solid var(--border); }
 .token-list li > div { display: flex; flex-direction: column; }
+/* The controls on a row: side by side and vertically centred, never stacked.
+   Reusing `.row` here wrapped them, because that class ends a form and so wraps
+   and bottom-aligns by design. */
+.token-actions { display: flex; flex-direction: row !important; align-items: center; gap: var(--space-3); flex: none; }
+.token-actions > select.input { max-width: 14rem; }
 
 .recipes { border-collapse: collapse; width: 100%; font-size: var(--text-sm); }
 .recipes th { text-align: left; font-weight: 500; padding: var(--space-2) var(--space-3) var(--space-2) 0; white-space: nowrap; }
@@ -251,14 +259,30 @@
 .engine-note { padding: var(--space-2) var(--space-3); background: var(--bg-sunken); border-radius: var(--radius); }
 
 /* --- pod list --- */
+/*
+ * One row: a description that may be any length, and its actions.
+ *
+ * Shared by the pod list and the template list because they were drifting
+ * apart. The template cards used `.row`, which wraps — so whether the buttons
+ * sat beside the text or below it came down to how long that particular model's
+ * name happened to be, and two cards in the same list disagreed. Here the text
+ * column is the one that gives way (`min-width: 0`), the actions never wrap,
+ * and below a set width everything stacks — the same way every time.
+ */
+.entry { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-4); }
+.entry-main { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; flex: 1; }
+.entry-actions { display: flex; gap: var(--space-2); flex-shrink: 0; align-items: center; }
+
+@media (max-width: 620px) {
+  .entry { flex-direction: column; align-items: stretch; }
+  .entry-actions { justify-content: flex-end; }
+}
+
 .pod-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
 .pod {
-  display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-4);
   padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius);
 }
 .pod.active { border-color: var(--accent); background: var(--accent-subtle); }
-.pod-main { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
-.pod-actions { display: flex; gap: var(--space-2); flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
 .verdict.verdict-ok, .verdict.verdict-bad { display: block; }
 
 .activity { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--text-sm); }

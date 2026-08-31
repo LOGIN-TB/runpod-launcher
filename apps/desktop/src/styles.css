@@ -63,33 +63,115 @@
   --focus: 0 0 0 3px var(--accent-subtle), 0 0 0 1px var(--accent);
 }
 
+/*
+ * The dark palette, defined once.
+ *
+ * It has to apply in two situations — the system asking for dark, and the user
+ * choosing dark explicitly — and CSS has no way to reuse a ruleset across a
+ * media query. So the values live here under their own names and the two blocks
+ * below only map them onto the real tokens. Changing a colour is one edit; the
+ * mapping is mechanical.
+ */
+:root {
+  --d-bg: #1a1a18;
+  --d-bg-raised: #232320;
+  --d-bg-sunken: #141412;
+  --d-border: #333330;
+  --d-border-strong: #4a4a45;
+  --d-text: #eeeeea;
+  --d-text-muted: #a3a39b;
+  --d-text-faint: #7a7a72;
+
+  --d-accent: #6aa886;
+  --d-accent-hover: #7cb996;
+  --d-accent-text: #10201a;
+  --d-accent-subtle: #23332b;
+
+  --d-running: #6aa886;
+  --d-running-bg: #1e2b24;
+  --d-stopped: #a3a39b;
+  --d-stopped-bg: #262623;
+  --d-pending: #cfa94a;
+  --d-pending-bg: #2e2718;
+  --d-danger: #e08b7f;
+  --d-danger-bg: #2e1d1b;
+
+  --d-shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 4px 12px rgb(0 0 0 / 20%);
+}
+
+/*
+ * Following the system, which is the default. `:not([data-theme])` is what lets
+ * an explicit choice of light win here — without it, choosing light on a
+ * system set to dark would do nothing.
+ */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1a1a18;
-    --bg-raised: #232320;
-    --bg-sunken: #141412;
-    --border: #333330;
-    --border-strong: #4a4a45;
-    --text: #eeeeea;
-    --text-muted: #a3a39b;
-    --text-faint: #7a7a72;
+  :root:not([data-theme]) {
+    --bg: var(--d-bg);
+    --bg-raised: var(--d-bg-raised);
+    --bg-sunken: var(--d-bg-sunken);
+    --border: var(--d-border);
+    --border-strong: var(--d-border-strong);
+    --text: var(--d-text);
+    --text-muted: var(--d-text-muted);
+    --text-faint: var(--d-text-faint);
 
-    --accent: #6aa886;
-    --accent-hover: #7cb996;
-    --accent-text: #10201a;
-    --accent-subtle: #23332b;
+    --accent: var(--d-accent);
+    --accent-hover: var(--d-accent-hover);
+    --accent-text: var(--d-accent-text);
+    --accent-subtle: var(--d-accent-subtle);
 
-    --running: #6aa886;
-    --running-bg: #1e2b24;
-    --stopped: #a3a39b;
-    --stopped-bg: #262623;
-    --pending: #cfa94a;
-    --pending-bg: #2e2718;
-    --danger: #e08b7f;
-    --danger-bg: #2e1d1b;
+    --running: var(--d-running);
+    --running-bg: var(--d-running-bg);
+    --stopped: var(--d-stopped);
+    --stopped-bg: var(--d-stopped-bg);
+    --pending: var(--d-pending);
+    --pending-bg: var(--d-pending-bg);
+    --danger: var(--d-danger);
+    --danger-bg: var(--d-danger-bg);
 
-    --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 4px 12px rgb(0 0 0 / 20%);
+    --shadow: var(--d-shadow);
   }
+}
+
+/* Chosen explicitly, which outranks the system either way. */
+:root[data-theme='dark'] {
+  /* Scrollbars and the native chrome of form controls follow this rather than
+     our tokens, so forcing a theme has to say so here as well — otherwise the
+     scrollbar and the open dropdown stay in the system's scheme. */
+  color-scheme: dark;
+  --bg: var(--d-bg);
+  --bg-raised: var(--d-bg-raised);
+  --bg-sunken: var(--d-bg-sunken);
+  --border: var(--d-border);
+  --border-strong: var(--d-border-strong);
+  --text: var(--d-text);
+  --text-muted: var(--d-text-muted);
+  --text-faint: var(--d-text-faint);
+
+  --accent: var(--d-accent);
+  --accent-hover: var(--d-accent-hover);
+  --accent-text: var(--d-accent-text);
+  --accent-subtle: var(--d-accent-subtle);
+
+  --running: var(--d-running);
+  --running-bg: var(--d-running-bg);
+  --stopped: var(--d-stopped);
+  --stopped-bg: var(--d-stopped-bg);
+  --pending: var(--d-pending);
+  --pending-bg: var(--d-pending-bg);
+  --danger: var(--d-danger);
+  --danger-bg: var(--d-danger-bg);
+
+  --shadow: var(--d-shadow);
+}
+
+/*
+ * Light needs no tokens of its own — those on `:root` are already the light
+ * values, and the attribute's main job is to stop the media query above from
+ * replacing them. Only the native chrome has to be told.
+ */
+:root[data-theme='light'] {
+  color-scheme: light;
 }
 
 *, *::before, *::after { box-sizing: border-box; }

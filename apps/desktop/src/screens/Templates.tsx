@@ -93,8 +93,8 @@ export function Templates({
       ) : (
         templates.map((template) => (
           <Card key={template.id}>
-            <div className="row space-between">
-              <div>
+            <div className="entry">
+              <div className="entry-main">
                 <strong>{template.name}</strong>
                 <p className="muted small">
                   {[template.chatModel, template.embeddingModel]
@@ -114,7 +114,7 @@ export function Templates({
               </div>
 
               {/* A list you can only look at is not a list of anything. */}
-              <div className="pod-actions">
+              <div className="entry-actions">
                 {/* This makes a new pod; it does not resume an existing one.
                     Calling it "Start" made people expect the latter. */}
                 <Button
@@ -189,6 +189,20 @@ function TemplateEditor({
   const [useEmbedding, setUseEmbedding] = useState(existing?.embeddingModel != null)
   const [sleepMode, setSleepMode] = useState<Template['lifecycleMode']>(existing?.lifecycleMode ?? 'stopResume')
   const [advanced, setAdvanced] = useState(false)
+  /**
+   * The vLLM parsers, seeded from the chosen model's own chat template and
+   * editable because detection reads a Jinja template and can be wrong. An
+   * unusual model must not be unusable.
+   */
+  const [toolParser, setToolParser] = useState(existing?.toolCallParser ?? '')
+  const [reasonParser, setReasonParser] = useState(existing?.reasoningParser ?? '')
+  /**
+   * Whether the parsers are the user's own, so detection never overwrites them.
+   * Same reason as the context above: a saved override is a decision.
+   */
+  const [parsersTouched, setParsersTouched] = useState(
+    existing?.toolCallParser != null || existing?.reasoningParser != null,
+  )
   const [schedule, setSchedule] = useState<Template['schedule']>(existing?.schedule ?? {
     enabled: false,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -200,7 +214,16 @@ function TemplateEditor({
     idleStopMinutes: 30,
     maxRuntimeHours: 12,
   })
-  const [maxLen, setMaxLen] = useState(String(existing?.maxModelLen ?? 16384))
+  const [maxLen, setMaxLen] = useState(String(existing?.maxModelLen ?? ''))
+  /**
+   * Whether the context is the user's own figure, so the fitted value never
+   * overwrites it.
+   *
+   * True from the start when editing a template that already has one: a value
+   * somebody saved is a decision, and re-opening the form to look at it must
+   * not silently change it.
+   */
+  const [maxLenTouched, setMaxLenTouched] = useState(existing?.maxModelLen !== undefined)
   const [maxSeqs, setMaxSeqs] = useState(String(existing?.maxConcurrentSequences ?? 64))
   // Whether the user has set the number themselves; until they do it follows
   // the engine, because the two spend memory very differently.
@@ -284,7 +307,11 @@ function TemplateEditor({
       gpuMemoryGib: gpu.memory,
       weightsGib: bytesToGib(chatBytes + embeddingBytes),
     })
-    const max = maxContextTokens(headroom)
+    // Two ceilings, and the lower one wins. The card's memory is the usual
+    // limit, but a model with a short window makes the engine refuse to start
+    // at all — and that refusal arrives after the weights have downloaded.
+    const native = chat.verdict?.details.nativeContextTokens ?? null
+    const max = Math.min(maxContextTokens(headroom), native ?? Number.MAX_SAFE_INTEGER)
     // llama.cpp shares one budget between slots; vLLM's window is per request.
     const asked = preset.engine === 'llamacpp' ? Number(maxLen) * Number(effectiveSeqs) : Number(maxLen)
     return { fits: asked <= max, max, asked }
@@ -296,7 +323,48 @@ function TemplateEditor({
     (!chat.repoId && !useEmbedding) ||
     (chat.repoId !== '' && chat.verdict?.compatible === false) ||
     (useEmbedding && embedding.verdict?.compatible === false) ||
+    // A chat model with no context figure would render `--max-model-len` with
+    // nothing after it, which swallows the next flag and fails the start with
+    // something that reads like an unrelated problem.
+    (chat.repoId !== '' && maxLen.trim() === '') ||
     contextBudget?.fits === false
+
+  /**
+   * The context starts at what actually fits on the card.
+   *
+   * It used to start at a flat 16384, which on a 48 GB card running FP8 weights
+   * throws away about eight times the context the card can hold — and it is what
+   * an agent then hits: `max_tokens=65536 cannot be greater than
+   * max_model_len=16384`, which the agent read as its own context being full and
+   * shut itself down over. The arithmetic for this was already here; it was only
+   * ever used to reject a number, never to offer one.
+   */
+  useEffect(() => {
+    if (maxLenTouched || !contextBudget) return
+    const perRequest =
+      preset.engine === 'llamacpp'
+        ? Math.floor(contextBudget.max / Math.max(1, Number(effectiveSeqs)))
+        : contextBudget.max
+    // Rounded down to a round number, because an exact figure from an estimate
+    // reads as a promise the estimate cannot keep.
+    const rounded = Math.max(4096, Math.floor(perRequest / 1024) * 1024)
+    setMaxLen(String(rounded))
+  }, [maxLenTouched, contextBudget?.max, preset.engine, effectiveSeqs])
+
+  // Detection fills the fields when a model is chosen, and stops the moment the
+  // user edits them.
+  const detected = chat.verdict?.details
+  useEffect(() => {
+    if (parsersTouched || !detected) return
+    setToolParser(detected.toolCallParser ?? '')
+    setReasonParser(detected.reasoningParser ?? '')
+  }, [detected?.repoId, detected?.toolCallParser, detected?.reasoningParser, parsersTouched])
+
+  /** llama.cpp reads the template out of the GGUF itself and takes no such flag. */
+  const parsers =
+    preset.engine === 'vllm'
+      ? { toolCallParser: toolParser || null, reasoningParser: reasonParser || null }
+      : { toolCallParser: null, reasoningParser: null }
 
   const save = async (): Promise<void> => {
     setSaving(true)
@@ -321,6 +389,16 @@ function TemplateEditor({
         maxModelLen: Number(maxLen),
         maxConcurrentSequences: Number(effectiveSeqs),
         lifecycleMode: sleepMode,
+        /**
+         * Taken from the chat model's own template rather than from its name.
+         *
+         * vLLM rejects a request with `tool_choice: "auto"` outright unless it
+         * was started with a parser, and the parser has to match the format the
+         * model emits — Qwen3.8 emits XML where its own family's documentation
+         * would suggest Hermes.
+         */
+        toolCallParser: parsers.toolCallParser,
+        reasoningParser: parsers.reasoningParser,
         schedule,
         networkVolumeId: null,
         args: chat.repoId ? preset.chatArgs : preset.embeddingArgs,
@@ -396,6 +474,7 @@ function TemplateEditor({
         gpu={gpu}
         otherSlotBytes={embeddingBytes}
         value={chat.repoId}
+        quantisation={existing?.chatModel?.quantisation ?? null}
         onChange={(repoId, verdict, quantisation) => setChat({ repoId, verdict, quantisation })}
       />
 
@@ -412,6 +491,7 @@ function TemplateEditor({
           gpu={gpu}
           otherSlotBytes={chatBytes}
           value={embedding.repoId}
+          quantisation={existing?.embeddingModel?.quantisation ?? null}
           onChange={(repoId, verdict, quantisation) => setEmbedding({ repoId, verdict, quantisation })}
         />
       ) : null}
@@ -477,7 +557,14 @@ function TemplateEditor({
                 }
               : {})}
           >
-            <Input type="number" value={maxLen} onChange={(event) => setMaxLen(event.target.value)} />
+            <Input
+              type="number"
+              value={maxLen}
+              onChange={(event) => {
+                setMaxLenTouched(true)
+                setMaxLen(event.target.value)
+              }}
+            />
           </Field>
           <Field label={t('template.concurrency')} hint={t(`template.concurrencyHint.${preset.engine}` as const)}>
             <Input
@@ -490,6 +577,34 @@ function TemplateEditor({
             />
           </Field>
         </div>
+      ) : null}
+
+      {advanced && preset.engine === 'vllm' ? (
+        <>
+          <div className="row">
+            <Field label={t('template.toolParser')}>
+              <Input
+                value={toolParser}
+                placeholder={t('template.parserNone')}
+                onChange={(event) => {
+                  setParsersTouched(true)
+                  setToolParser(event.target.value.trim())
+                }}
+              />
+            </Field>
+            <Field label={t('template.reasoningParser')}>
+              <Input
+                value={reasonParser}
+                placeholder={t('template.parserNone')}
+                onChange={(event) => {
+                  setParsersTouched(true)
+                  setReasonParser(event.target.value.trim())
+                }}
+              />
+            </Field>
+          </div>
+          <p className="muted small">{t('template.parserHint')}</p>
+        </>
       ) : null}
 
       {error ? (
