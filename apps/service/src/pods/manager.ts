@@ -14,6 +14,14 @@ const READY_POLL_MS = 5_000
  * gateway keeps posting into a port nothing is listening on.
  */
 const READY_CACHE_MS = 10_000
+/**
+ * How long to wait for a pod's own health endpoint.
+ *
+ * Two and a half seconds rather than four. Through RunPod's proxy the answer
+ * either comes quickly or the engine is not listening — and this timeout is
+ * what somebody waits through while looking at the pod list.
+ */
+const PROBE_TIMEOUT_MS = 2_500
 
 /**
  * Who asked for a pod.
@@ -98,6 +106,17 @@ export class PodManager {
    * answer and report whichever pod asked last.
    */
   private readonly readyCache = new Map<string, { ready: boolean; at: number }>()
+  /**
+   * The same idea for the pod list's richer answer, keyed by pod.
+   *
+   * Without it every poll re-ran the probes — including the timeouts of a pod
+   * that had just failed to answer, which is the slow case rather than the fast
+   * one.
+   */
+  private readonly readinessCache = new Map<
+    string,
+    { value: { state: Readiness; detail: string | null }; at: number }
+  >()
 
   constructor(
     private readonly db: Db,
@@ -588,25 +607,50 @@ export class PodManager {
   /** Forgets the cached readiness, after any action that changes it. */
   private forgetReadiness(): void {
     this.readyCache.clear()
+    this.readinessCache.clear()
   }
 
-  /** Asks the pod's own engine whether it is serving yet. */
+  /**
+   * Asks the pod's own engine whether it is serving yet.
+   *
+   * Cached briefly, and the two ports are asked at the same time. Neither was
+   * true before, and the pod list paid for it: a pod that RunPod calls RUNNING
+   * while its engine is still loading answers nothing, so each port ran its
+   * timeout to the end, one after the other, and the log fetch followed. Every
+   * few seconds, for every such pod — which is why the list took its time
+   * appearing at exactly the moment somebody was watching it start.
+   */
   private async readinessOf(pod: runpod.Pod): Promise<{ state: Readiness; detail: string | null }> {
     if (pod.status === 'PROVISIONING' || pod.status === 'STARTING') {
       return { state: 'provisioning', detail: null }
     }
     if (pod.status !== 'RUNNING') return { state: 'stopped', detail: null }
 
-    for (const port of [POD_PORTS.chat, POD_PORTS.embedding]) {
-      try {
-        const response = await fetch(`${podProxyUrl(pod.id, port)}/health`, {
-          signal: AbortSignal.timeout(4_000),
-        })
-        if (response.ok) return { state: 'ready', detail: null }
-      } catch {
-        // Still coming up, or this port is not in use by this template.
-      }
-    }
+    const cached = this.readinessCache.get(pod.id)
+    if (cached && Date.now() - cached.at < READY_CACHE_MS) return cached.value
+
+    const value = await this.probeReadiness(pod)
+    this.readinessCache.set(pod.id, { value, at: Date.now() })
+    return value
+  }
+
+  private async probeReadiness(pod: runpod.Pod): Promise<{ state: Readiness; detail: string | null }> {
+    // Both ports at once. A template uses one or both, and asking them in turn
+    // means the unused one's timeout is added to the wait for no information.
+    const answered = await Promise.all(
+      [POD_PORTS.chat, POD_PORTS.embedding].map(async (port) => {
+        try {
+          const response = await fetch(`${podProxyUrl(pod.id, port)}/health`, {
+            signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+          })
+          return response.ok
+        } catch {
+          // Still coming up, or this port is not in use by this template.
+          return false
+        }
+      }),
+    )
+    if (answered.some(Boolean)) return { state: 'ready', detail: null }
 
     if (await this.engineIsCrashLooping(pod.id)) {
       return {

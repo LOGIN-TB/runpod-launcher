@@ -11,6 +11,7 @@ import {
 } from '../lib/api.js'
 import { useI18n } from '../lib/i18n.js'
 import { Badge, Button, Card, EmptyState } from './primitives.js'
+import { useCached } from '../lib/cached.js'
 import { Confirm } from './Confirm.js'
 
 /** Fast while something is coming up, so a state change is visible promptly. */
@@ -47,7 +48,17 @@ export function PodList({
   templates: Template[]
 }): ReactNode {
   const { t, money } = useI18n()
-  const [pods, setPods] = useState<PodStatusReport[] | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [test, setTest] = useState<SelfTestResult | null>(null)
+  const [testing, setTesting] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  // The pod list survives leaving the screen and coming back, so returning to it
+  // does not mean waiting out a call to RunPod and a health probe per pod again.
+  const podsQuery = useCached(`pods:${connection.baseUrl}`, () => api.pods(connection).then((r) => r.pods))
+  const pods = podsQuery.data ?? null
+
   /**
    * Which applications reach which pod.
    *
@@ -56,28 +67,28 @@ export function PodList({
    * It also makes the expensive case visible: a pod that is running with nothing
    * pointed at it bills by the hour and serves no one.
    */
-  const [clients, setClients] = useState<ClientToken[]>([])
-  const [busy, setBusy] = useState<string | null>(null)
-  const [test, setTest] = useState<SelfTestResult | null>(null)
-  const [testing, setTesting] = useState(false)
-  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const clientsQuery = useCached(`client-tokens:${connection.baseUrl}`, () =>
+    api.clientTokens(connection).then((r) => r.tokens),
+  )
+  const clients = (clientsQuery.data ?? []).filter((token) => token.revokedAt === null)
 
+  /** After acting: always ask again, because the answer has just changed. */
   const load = async (): Promise<void> => {
-    const [result, tokens] = await Promise.all([
-      api.pods(connection).catch(() => null),
-      api.clientTokens(connection).catch(() => null),
-    ])
-    if (result) setPods(result.pods)
-    if (tokens) setClients(tokens.tokens.filter((token) => token.revokedAt === null))
+    await Promise.all([podsQuery.refresh(), clientsQuery.refresh()])
   }
 
+  /** On a timer: never queue behind a request that is still running. */
+  const poll = async (): Promise<void> => {
+    await Promise.all([podsQuery.refresh('poll'), clientsQuery.refresh('poll')])
+  }
+
+  // Faster while something is coming up, because that is the only time the
+  // answer changes on its own.
+  const anyBusy = pods?.some((pod) => pod.readiness === 'preparing' || pod.readiness === 'provisioning')
   useEffect(() => {
-    void load()
-    const anyBusy = pods?.some((pod) => pod.readiness === 'preparing' || pod.readiness === 'provisioning')
-    const timer = setInterval(load, anyBusy ? POLL_BUSY_MS : POLL_IDLE_MS)
+    const timer = setInterval(() => void poll(), anyBusy ? POLL_BUSY_MS : POLL_IDLE_MS)
     return () => clearInterval(timer)
-  }, [connection, pods?.some((pod) => pod.readiness === 'preparing')])
+  }, [connection, anyBusy])
 
   const act = async (id: string, fn: () => Promise<unknown>): Promise<void> => {
     setBusy(id)
@@ -106,7 +117,16 @@ export function PodList({
     }
   }
 
-  if (!pods) return null
+  // Only before there has ever been an answer. After that the previous one is
+  // shown while the next is on its way, rather than the section disappearing.
+  if (!pods) {
+    return (
+      <Card>
+        <h3>{t('pods.title')}</h3>
+        <p className="muted small">{t('pods.loading')}</p>
+      </Card>
+    )
+  }
 
   if (pods.length === 0) {
     return (

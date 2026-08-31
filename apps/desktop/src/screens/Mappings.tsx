@@ -9,6 +9,7 @@ import {
 } from '../lib/api.js'
 import { useI18n } from '../lib/i18n.js'
 import { Badge, Card, EmptyState } from '../components/primitives.js'
+import { useCached } from '../lib/cached.js'
 
 const POLL_MS = 10_000
 
@@ -37,25 +38,38 @@ export function Mappings({ connection }: { connection: Connection }): ReactNode 
   const [pods, setPods] = useState<PodStatusReport[]>([])
   const [error, setError] = useState<string | null>(null)
 
+  // The same three answers the pod list and the access list use, under the same
+  // keys — so arriving here from either of them shows the table at once.
+  const tokensQuery = useCached(`client-tokens:${connection.baseUrl}`, () =>
+    api.clientTokens(connection).then((r) => r.tokens),
+  )
+  const templatesQuery = useCached(`templates:${connection.baseUrl}`, () =>
+    api.templates(connection).then((r) => r.templates),
+  )
+  const podsQuery = useCached(`pods:${connection.baseUrl}`, () => api.pods(connection).then((r) => r.pods))
+
   const reload = async (): Promise<void> => {
-    try {
-      const [tokenList, templateList, podList] = await Promise.all([
-        api.clientTokens(connection),
-        api.templates(connection),
-        api.pods(connection).catch(() => ({ pods: [] })),
-      ])
-      setTokens(tokenList.tokens.filter((token) => token.revokedAt === null))
-      setTemplates(templateList.templates)
-      setPods(podList.pods)
-      setError(null)
-    } catch (cause) {
-      setError((cause as Error).message)
-    }
+    await Promise.all([tokensQuery.refresh(), templatesQuery.refresh(), podsQuery.refresh()])
+  }
+
+  /** On a timer: never queue behind a request that is still running. */
+  const poll = async (): Promise<void> => {
+    await Promise.all([
+      tokensQuery.refresh('poll'),
+      templatesQuery.refresh('poll'),
+      podsQuery.refresh('poll'),
+    ])
   }
 
   useEffect(() => {
-    void reload()
-    const timer = setInterval(reload, POLL_MS)
+    setTokens((tokensQuery.data ?? []).filter((token) => token.revokedAt === null))
+    setTemplates(templatesQuery.data ?? [])
+    setPods(podsQuery.data ?? [])
+    setError(tokensQuery.error ?? templatesQuery.error ?? podsQuery.error)
+  }, [tokensQuery.data, templatesQuery.data, podsQuery.data, tokensQuery.error, templatesQuery.error, podsQuery.error])
+
+  useEffect(() => {
+    const timer = setInterval(() => void poll(), POLL_MS)
     return () => clearInterval(timer)
   }, [connection])
 

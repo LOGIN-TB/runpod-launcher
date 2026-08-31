@@ -307,3 +307,76 @@ test('a pod recorded before arguments were tracked is still resumed', async () =
   const resumed = await manager.start(tpl)
   assert.equal(resumed.id, first.id, 'the same pod comes back')
 })
+
+test('a pod that answers nothing is not waited through twice, or twice over', async () => {
+  // The pod list's slow case: RunPod calls a pod RUNNING while its engine is
+  // still loading, so neither port answers. Asking them in turn ran both
+  // timeouts end to end, and every poll a few seconds later ran them again.
+  const db = openDatabase(':memory:')
+  const tpl = template()
+  const now = new Date().toISOString()
+  db.prepare('INSERT INTO templates (id, name, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+    .run(tpl.id, tpl.name, JSON.stringify(tpl), now, now)
+  // Three of them, because the bound that matters is per call, not per pod: a
+  // list of starting pods must not take three times as long as one.
+  const live = ['p-one', 'p-two', 'p-three']
+  for (const id of live) {
+    db.prepare(
+      `INSERT INTO pods (id, template_id, status, cost_per_hour, created_at, started_at, api_key)
+       VALUES (?, ?, 'RUNNING', 0.44, ?, ?, 'k')`,
+    ).run(id, tpl.id, now, now)
+  }
+
+  // When each health probe started, and never an answer to any of them. Both
+  // the RunPod list and the probes go through this: the list has to report
+  // RUNNING, or nothing is probed at all.
+  const starts: number[] = []
+  const fetchImpl = (async (url: unknown, init?: RequestInit) => {
+    const target = String(url)
+    if (target.endsWith('/health')) {
+      starts.push(Date.now())
+      return new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('timed out')))
+      })
+    }
+    if (target.endsWith('/v2/pods')) {
+      return new Response(
+        JSON.stringify({
+          pods: live.map((id) => ({ id, status: 'RUNNING', cost: 0.44, startedAt: now })),
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }
+    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as unknown as typeof fetch
+
+  const original = globalThis.fetch
+  globalThis.fetch = fetchImpl
+  const manager = new PodManager(db, () => new RunpodClient('key', fetchImpl), () => null)
+
+  try {
+    const began = Date.now()
+    const first = await manager.listAll()
+    const took = Date.now() - began
+
+    assert.deepEqual(
+      first.map((pod) => pod.readiness),
+      ['preparing', 'preparing', 'preparing'],
+    )
+    assert.equal(starts.length, 6, 'both ports of all three pods were asked')
+    assert.ok(
+      Math.max(...starts) - Math.min(...starts) < 500,
+      'all at the same time, not one after another',
+    )
+    // One timeout for the whole list rather than one per port per pod. Asked in
+    // turn, six probes at two and a half seconds would be fifteen.
+    assert.ok(took < 6_000, `the whole list took ${took}ms, which should be about one timeout`)
+
+    // And the same question again straight away costs nothing: the answer is
+    // held for a few seconds, so a poll does not re-run the timeouts.
+    await manager.listAll()
+    assert.equal(starts.length, 6, 'no second round of probes')
+  } finally {
+    globalThis.fetch = original
+  }
+})

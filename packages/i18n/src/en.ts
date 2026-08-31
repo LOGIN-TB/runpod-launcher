@@ -54,6 +54,7 @@ export const en = {
   'activity.settingsChanged': 'Settings changed',
 
   'pods.title': 'Pods',
+  'pods.loading': 'Loading …',
   'pods.none': 'No pods',
   'pods.noneHint':
     'Nothing is rented, so nothing is being billed. Create one under Templates, from the template it should use.',

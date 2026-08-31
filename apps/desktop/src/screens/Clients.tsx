@@ -5,6 +5,7 @@ import { useI18n } from '../lib/i18n.js'
 import { Badge, Button, Card, EmptyState, Field, Input } from '../components/primitives.js'
 import { CopyField } from '../components/CopyField.js'
 import { Confirm } from '../components/Confirm.js'
+import { useCached } from '../lib/cached.js'
 
 /**
  * Client tokens, and the recipes for using them.
@@ -26,18 +27,24 @@ export function Clients({ connection }: { connection: Connection }): ReactNode {
   // `window.confirm` does nothing in a Tauri webview, so removals ask here.
   const [pendingDelete, setPendingDelete] = useState<ClientToken | null>(null)
 
+  // Shared with the pod list under the same keys, so whichever screen is opened
+  // first pays for the answer and the other one has it already.
+  const tokensQuery = useCached(`client-tokens:${connection.baseUrl}`, () =>
+    api.clientTokens(connection).then((r) => r.tokens),
+  )
+  const templatesQuery = useCached(`templates:${connection.baseUrl}`, () =>
+    api.templates(connection).then((r) => r.templates),
+  )
+
   const reload = async (): Promise<void> => {
-    const [tokenList, templateList] = await Promise.all([
-      api.clientTokens(connection),
-      api.templates(connection),
-    ])
-    setTokens(tokenList.tokens)
-    setTemplates(templateList.templates)
-    setTarget((current) => current || (templateList.templates[0]?.id ?? ''))
+    await Promise.all([tokensQuery.refresh(), templatesQuery.refresh()])
   }
+
   useEffect(() => {
-    void reload()
-  }, [connection])
+    setTokens(tokensQuery.data ?? [])
+    setTemplates(templatesQuery.data ?? [])
+    setTarget((current) => current || (templatesQuery.data?.[0]?.id ?? ''))
+  }, [tokensQuery.data, templatesQuery.data])
 
   const create = async (): Promise<void> => {
     setBusy(true)

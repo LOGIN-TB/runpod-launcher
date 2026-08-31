@@ -59,6 +59,7 @@ export const de = {
   'activity.settingsChanged': 'Einstellungen geändert',
 
   'pods.title': 'Pods',
+  'pods.loading': 'Wird geladen …',
   'pods.none': 'Keine Pods',
   'pods.noneHint':
     'Nichts gemietet, also kostet gerade nichts. Einen Pod erstellst du unter „Vorlagen“ bei der Vorlage, die er benutzen soll.',
