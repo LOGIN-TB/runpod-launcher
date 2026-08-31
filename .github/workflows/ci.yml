@@ -67,6 +67,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Through the metadata action rather than by writing the tag out, because
+      # `github.repository` carries the owner's own capitalisation and a
+      # container tag must be lowercase — a hand-written tag fails the build
+      # with "repository name must be lowercase" on any account with a capital
+      # letter in it. This is also how `release.yml` does it.
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=main-,enable={{is_default_branch}}
+
       - name: Build service image
         uses: docker/build-push-action@v6
         with:
@@ -76,8 +89,7 @@ jobs:
           # not worth paying for on every pull request.
           platforms: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           push: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
-          tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:main-${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
