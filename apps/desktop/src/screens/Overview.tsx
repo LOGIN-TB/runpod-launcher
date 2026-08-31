@@ -19,10 +19,12 @@ export function Overview({
   connection,
   templates,
   onGoToTemplates,
+  onGoToCosts,
 }: {
   connection: Connection
   templates: Template[]
   onGoToTemplates: () => void
+  onGoToCosts: () => void
 }): ReactNode {
   const { t } = useI18n()
   const [error, setError] = useState<string | null>(null)
@@ -87,7 +89,7 @@ export function Overview({
           decision about a template, which is where the templates are. */}
       <PodList connection={connection} templates={templates} />
 
-      <SpendPanel connection={connection} />
+      <SpendPanel connection={connection} onGoToCosts={onGoToCosts} />
 
       {/* Why anything changed, which the audit log knew all along. */}
       <Activity connection={connection} />

@@ -178,7 +178,21 @@ export class RunpodClient {
   }
 
   /** Actual billed cost, rather than our own estimate from hourly rate. */
-  listPodBilling(query: { from?: string; to?: string; podId?: string } = {}): Promise<{
+  listPodBilling(
+    query: {
+      from?: string
+      to?: string
+      podId?: string
+      /**
+       * How finely to bucket. Hourly is what lets a bucket be attributed to a
+       * local day and tells us how far billing has actually got.
+       *
+       * `from`/`to` are sent but not honoured — verified against three ranges,
+       * all returning the account's whole history — so the caller filters.
+       */
+      bucketSize?: 'hour' | 'day'
+    } = {},
+  ): Promise<{
     records: runpod.PodBillingRecord[]
   }> {
     return this.call('listPodBilling', { query })

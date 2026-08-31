@@ -8,11 +8,12 @@ import { Overview } from './screens/Overview.js'
 import { Templates } from './screens/Templates.js'
 import { Clients } from './screens/Clients.js'
 import { Mappings } from './screens/Mappings.js'
+import { Costs } from './screens/Costs.js'
 import { Settings } from './screens/Settings.js'
 import { Help } from './screens/Help.js'
 import { Setup } from './screens/Setup.js'
 
-type Screen = 'overview' | 'templates' | 'clients' | 'mappings' | 'settings' | 'help'
+type Screen = 'overview' | 'templates' | 'clients' | 'mappings' | 'costs' | 'settings' | 'help'
 
 export function App(): ReactNode {
   const { t } = useI18n()
@@ -64,6 +65,7 @@ export function App(): ReactNode {
     { id: 'templates', label: t('nav.templates') },
     { id: 'clients', label: t('nav.clients') },
     { id: 'mappings', label: t('nav.mappings') },
+    { id: 'costs', label: t('nav.costs') },
     { id: 'settings', label: t('nav.settings') },
     { id: 'help', label: t('nav.help') },
   ]
@@ -96,13 +98,19 @@ export function App(): ReactNode {
         ) : null}
 
         {screen === 'overview' ? (
-          <Overview connection={connection} templates={templates} onGoToTemplates={() => setScreen('templates')} />
+          <Overview
+            connection={connection}
+            templates={templates}
+            onGoToTemplates={() => setScreen('templates')}
+            onGoToCosts={() => setScreen('costs')}
+          />
         ) : null}
         {screen === 'templates' ? (
           <Templates connection={connection} templates={templates} onChanged={reloadTemplates} />
         ) : null}
         {screen === 'clients' ? <Clients connection={connection} /> : null}
         {screen === 'mappings' ? <Mappings connection={connection} /> : null}
+        {screen === 'costs' ? <Costs connection={connection} /> : null}
         {screen === 'settings' ? <Settings connection={connection} /> : null}
         {screen === 'help' ? <Help /> : null}
       </main>

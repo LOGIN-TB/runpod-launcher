@@ -1,4 +1,4 @@
-import type { Problem, PublicSettings, Template } from '@runpod-launcher/shared'
+import type { Problem, PublicSettings, SpendReport, Template } from '@runpod-launcher/shared'
 import { serviceFetch } from './http.js'
 
 /**
@@ -208,6 +208,8 @@ export const api = {
 
   spend: (c: Connection) => request<SpendSnapshot>(c, '/spend'),
   schedulePreview: (c: Connection) => request<{ actions: ScheduledDecision[] }>(c, '/schedule/preview'),
+  /** The breakdown behind the two figures: per day and per template. */
+  spendReport: (c: Connection) => request<SpendReport>(c, '/spend/report'),
 
   searchModels: (c: Connection, q: string, kind: 'chat' | 'embedding') =>
     request<{ models: ModelHit[] }>(c, `/models/search?q=${encodeURIComponent(q)}&kind=${kind}`),

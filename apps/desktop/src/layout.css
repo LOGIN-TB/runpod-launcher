@@ -210,6 +210,84 @@ select.input {
   .content { padding: var(--space-4); }
 }
 
+/* --- cost pictures ---
+   Boxes, not SVG: bars are rectangles, the labels stay real text, and every
+   colour comes from the same tokens as the rest of the app so dark mode needs
+   no second implementation. */
+
+.gauge { display: flex; flex-direction: column; gap: var(--space-1); flex: 1; min-width: 11rem; }
+.gauge-label { font-size: var(--text-xs); color: var(--text-muted); }
+.gauge-value { font-size: var(--text-xl); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.gauge-note { font-size: var(--text-xs); }
+
+.gauge-track {
+  display: flex;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.gauge-billed { background: var(--accent); }
+/* The part that is our own arithmetic rather than RunPod's bill — lighter, so
+   the distinction is visible without needing the caption. */
+.gauge-estimated { background: var(--accent); opacity: 0.4; }
+
+.gauge-near .gauge-billed, .gauge-near .gauge-estimated { background: var(--pending); }
+.gauge-near .gauge-value { color: var(--pending); }
+.gauge-over .gauge-billed, .gauge-over .gauge-estimated { background: var(--danger); }
+.gauge-over .gauge-value { color: var(--danger); }
+
+.day-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 120px;
+  padding-top: var(--space-2);
+}
+.day-bar { flex: 1; height: 100%; display: flex; align-items: flex-end; min-width: 0; }
+.day-stack {
+  width: 100%;
+  /* Two pixels, so the smallest bar is still a bar — but only ever rendered for
+     a day that actually cost something. */
+  min-height: 2px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  border-radius: 2px 2px 0 0;
+  overflow: hidden;
+}
+.day-gpu { background: var(--accent); }
+/* Storage: what a stopped pod still costs. Deliberately a different colour, so
+   a day with no GPU time at all still reads as money. */
+.day-disk { background: var(--pending); }
+/* Today is partly an estimate, and says so by not being solid. */
+.day-stack.partial { opacity: 0.65; }
+
+.day-axis { display: flex; gap: 2px; }
+.day-tick {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-legend { display: flex; gap: var(--space-4); flex-wrap: wrap; align-items: center; }
+.swatch { display: inline-block; width: 0.65rem; height: 0.65rem; border-radius: 2px; vertical-align: baseline; }
+.swatch-gpu { background: var(--accent); }
+.swatch-disk { background: var(--pending); }
+.swatch-partial { background: var(--accent); opacity: 0.65; }
+
+.share-cell { width: 55%; }
+.share-bar { height: 8px; border-radius: 999px; background: var(--bg-sunken); overflow: hidden; }
+.share-fill { height: 100%; background: var(--accent); }
+/* Pods that are not this launcher's, and templates that no longer exist: still
+   money, but not something you can act on from here. */
+.share-bar.other .share-fill { background: var(--stopped); }
+.share-amount { white-space: nowrap; font-variant-numeric: tabular-nums; text-align: right; }
+
 /* --- schedule and spending --- */
 .weekdays { display: flex; gap: var(--space-1); flex-wrap: wrap; }
 .weekday {

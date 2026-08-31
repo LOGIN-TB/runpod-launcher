@@ -42,7 +42,7 @@ if (!TOKEN) {
  * every index after it, which would have captured Settings under the name of a
  * different screen — a screenshot that is confidently of the wrong thing.
  */
-const SCREENS = ['overview', 'templates', 'clients', 'mappings', 'settings', 'help']
+const SCREENS = ['overview', 'templates', 'clients', 'mappings', 'costs', 'settings', 'help']
 const LOCALES = ['en', 'de']
 const SCHEMES = ['light', 'dark']
 

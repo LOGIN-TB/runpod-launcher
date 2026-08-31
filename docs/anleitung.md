@@ -257,6 +257,28 @@ keinen Grund, vorher irgendeinen Weck-Endpunkt aufzurufen. Setze die Wartezeit
 länger als einen Kaltstart: etwa fünf Minuten für ein 20-GB-Modell, mehr wenn es
 erst geladen werden muss.
 
+### Wo das Geld hingeht
+
+Der Bereich **Kosten** zeigt es in drei Bildern: zwei Anzeiger für Heute und
+diesen Monat samt Abstand zum Limit, ein Balken je Tag des Monats, und wer es
+ausgegeben hat.
+
+Drei Dinge, die man dort sieht und sonst nirgends:
+
+- **GPU-Zeit und Speicher getrennt.** Ein gestoppter Pod behält seine Festplatte,
+  und RunPod berechnet sie weiter. Auf dem Konto, gegen das das gebaut wurde,
+  sind das exakt 0,20 $ pro Tag, an denen gar keine GPU lief. In einer
+  Gesamtsumme ist das unsichtbar.
+- **Was nicht vom Launcher ist.** Pods, die du direkt bei RunPod startest, stehen
+  als eigener Posten da. Ohne ihn ergäben die Teile nicht die Summe auf deiner
+  Rechnung — bei diesem Konto fehlten 61 %.
+- **Was noch nicht abgerechnet ist.** RunPods Abrechnung hängt etwa eineinhalb
+  Stunden zurück. Der helle Teil des Anzeigers und der helle Balken für heute
+  sind die eigene Rechnung des Launchers, nicht die von RunPod.
+
+Gezählt werden **Pods**. Netzlaufwerke und Serverless rechnet RunPod getrennt ab
+und erscheinen dort nicht.
+
 ### Ausgabengrenzen
 
 Ein **leeres Feld heißt: keine Grenze** — dann läuft ein vergessener Pod, bis es

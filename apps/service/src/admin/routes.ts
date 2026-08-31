@@ -205,6 +205,24 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps)
   })
 
   /**
+   * Where the money went: per day and per template.
+   *
+   * Answers 200 even when billing is unreachable, with `stale: true` and the
+   * previous figures. A cost screen that shows an error instead of "as of
+   * 14:05" is less useful than one that admits it is behind.
+   */
+  app.get('/spend/report', async (request, reply) => {
+    if (!(await requireDevice(request, reply))) return
+    const settings = deps.settings.read()
+    const report = await deps.spend.report(new Date())
+    return reply.send({
+      ...report,
+      dailyLimitUsd: settings.dailyLimitUsd,
+      monthlyLimitUsd: settings.monthlyLimitUsd,
+    })
+  })
+
+  /**
    * What the scheduler would do right now, and why.
    *
    * A schedule that silently does nothing is impossible to debug from the

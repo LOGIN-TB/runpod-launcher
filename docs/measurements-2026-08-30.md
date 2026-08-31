@@ -136,6 +136,18 @@ changing a flag.
 - `GET /v2/pods/{id}/logs` streams and does not terminate on its own; the client
   must impose a deadline.
 - Without `HF_TOKEN`, HuggingFace warns about rate limits and downloads slower.
-- Billing is bucketed per day, so same-day cost does not appear immediately.
-  `GET /v2/billing/pods` gives real amounts split into GPU and disk — better
+- `GET /v2/billing/pods` gives real amounts split into GPU and disk — better
   than estimating from the hourly rate.
+- **Corrected on 2026-08-31.** This note used to say that billing is bucketed
+  per day and same-day cost does not appear immediately. It does. Checked at
+  13:34 UTC: hourly records existed up to 12:00, and a day record for the
+  current day was already there. Billing runs roughly an hour and a half behind,
+  not a day.
+
+  That mattered: the launcher added an estimate of the whole run on top of the
+  billed figure, so every already-billed hour was counted twice, and the spend
+  caps compared the inflated number.
+- `bucketSize=hour` is accepted and returns one record per pod per hour; `day`
+  is the default. The two totals agreed to 0.24% over the same history.
+- **`from` and `to` are ignored.** Three different ranges each returned the
+  account's whole history, 44 day-records. Any window has to be applied locally.
