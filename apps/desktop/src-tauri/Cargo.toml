@@ -1,6 +1,6 @@
 [package]
 name = "runpod-launcher"
-version = "0.0.1"
+version = "0.1.0"
 description = "Launcher for RunPod GPU pods serving OpenAI-compatible endpoints"
 edition = "2021"
 rust-version = "1.82"

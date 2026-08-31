@@ -5,7 +5,7 @@ import { CopyField } from '../components/CopyField.js'
 
 const COMPOSE = `services:
   launcher:
-    image: ghcr.io/OWNER/runpod-launcher:latest
+    image: ghcr.io/login-tb/runpod-launcher:latest
     restart: unless-stopped
     environment:
       - SERVICE_FQDN_LAUNCHER_8080
@@ -62,7 +62,7 @@ export function Help(): ReactNode {
         ) : (
           <>
             <p className="muted small">{t('help.install.coolifySteps')}</p>
-            <CopyField value="https://github.com/OWNER/runpod-launcher" />
+            <CopyField value="https://github.com/LOGIN-TB/runpod-launcher" />
           </>
         )}
       </Card>

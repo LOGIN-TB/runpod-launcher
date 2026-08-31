@@ -1,0 +1,55 @@
+name: Bump version and tag
+
+# Started by hand, because a release is a decision. What it removes is the
+# hand-editing: the number moves in all seven files that carry one, the tag is
+# derived from it, and pushing that tag is what starts `release.yml`.
+#
+# Run it from the Actions tab: "Bump version and tag" -> Run workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'patch (0.1.0 -> 0.1.1), minor (-> 0.2.0), major (-> 1.0.0), or an exact X.Y.Z'
+        required: true
+        default: patch
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The tag is pushed from here, and a shallow clone cannot see whether
+          # it already exists.
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with: { node-version: 24, cache: npm }
+
+      # Never release something that does not pass its own tests. This is the
+      # last place where that is still cheap to find out.
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+      - name: Move the version
+        id: version
+        run: echo "value=$(node tools/bump-version.mjs '${{ inputs.bump }}')" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse a version that already exists
+        run: |
+          if git rev-parse "v${{ steps.version.outputs.value }}" >/dev/null 2>&1; then
+            echo "v${{ steps.version.outputs.value }} is already tagged." >&2
+            exit 1
+          fi
+
+      - name: Commit and tag
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -am "Release v${{ steps.version.outputs.value }}"
+          git tag -a "v${{ steps.version.outputs.value }}" -m "v${{ steps.version.outputs.value }}"
+          git push origin HEAD --follow-tags

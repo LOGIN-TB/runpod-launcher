@@ -7,9 +7,12 @@ A GPU big enough for a 27B model costs roughly **$400/month if you leave it
 running**. This project exists to make that number a fraction of itself without
 you having to remember to switch anything off.
 
-> **Status: working, unsigned, lightly used.** Everything below is built and
-> tested, and has been run against real RunPod hardware. The desktop app is not
+> **Status: v0.1.0 — working, unsigned, lightly used.** Everything below is
+> built and tested, and has been run against real RunPod hardware: pods started,
+> answers streamed, schedules and spend caps triggered. The desktop app is not
 > code-signed, so macOS and Windows warn on first launch.
+
+Deutschsprachige Schritt-für-Schritt-Anleitung: **[docs/anleitung.md](docs/anleitung.md)**.
 
 ## How it fits together
 
@@ -38,10 +41,17 @@ Nothing confidential goes in a file. The RunPod key, the HuggingFace token and
 any webhook URL are typed into the app and stored encrypted. What follows sets
 only a port and a TLS mode.
 
+> **One-time, or the pull fails:** a new GHCR package is **private** even when
+> the repository is public. After the first publish, go to GitHub → *Packages* →
+> `runpod-launcher` → *Package settings* → *Change visibility* → **Public**.
+> Until then `docker compose up` answers `unauthorized` or `manifest unknown`.
+>
+> `:latest` follows `main`. Version tags (`:0.1.0`) appear only with a release.
+
 ### With Docker Compose
 
 ```bash
-curl -O https://raw.githubusercontent.com/OWNER/runpod-launcher/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/LOGIN-TB/runpod-launcher/main/docker-compose.yml
 docker compose up -d
 docker compose logs | grep -A4 "Pair the launcher app"
 ```
@@ -84,6 +94,30 @@ curl http://your-server:8080/v1/chat/completions \
 settings — so a token leaking out of an n8n workflow cannot rent you hardware.
 Device tokens, which the app holds, are what grant control.
 
+## Which application reaches which pod
+
+Every access points at one template, and that is what decides the pod a request
+lands on. n8n on a server and an agent on your desk can share one pod, or each
+have their own — several accesses on one template is one pod, one access each is
+two.
+
+The target hangs on the **access**, not on the application. So moving n8n to
+other hardware is a change in the launcher and nothing at all on the n8n side:
+the credential it holds stays valid. The **Mappings** screen shows the pairs, the
+state of each pod, and — the expensive case — a pod that is running with nothing
+pointed at it.
+
+Two consequences worth knowing:
+
+- An access can only wake **its own** pod, and only inside that template's
+  schedule. An agent cannot accidentally start the GPU another application rents.
+- `/v1/models` lists what that access's own template serves, and reports the
+  context window with it, so a client can size its requests instead of guessing.
+
+**Pods at once** in the settings is the ceiling on how many GPUs can be rented
+simultaneously. It defaults to 2, and the daily and monthly caps still apply to
+all of them together.
+
 ## Letting it sleep
 
 The point of the project. A template can carry a schedule — weekdays, hours,
@@ -119,6 +153,20 @@ only, embeddings only, or both on one card.
 The embedding model is tiny next to the chat model (about 1 GB against 27 GB),
 so running both on one GPU costs nothing extra. When only one slot is filled,
 the other's share of VRAM goes to it, which directly buys context length.
+
+**Tool calling is read from the model, not guessed from its name.** vLLM rejects
+any request carrying tools unless it was started with `--enable-auto-tool-choice`
+and a matching `--tool-call-parser`, and the right parser depends on the format
+the model actually emits. The launcher reads the model's own chat template to
+decide: vLLM's documentation lists Qwen2.5 under `hermes`, but a Qwen3.8 template
+emits XML and needs `qwen3_xml` — following the documentation would have produced
+a parser that cannot read the model's calls at all. Both parsers are shown under
+*Advanced* and can be overridden.
+
+**The context length starts at what fits.** The editor offers the largest window
+the card can hold with those weights, capped by what the model itself supports.
+Both ceilings matter: too large for the card wastes the download, and too large
+for the model makes the engine refuse to start — after the weights have arrived.
 
 ### Sleep modes
 
@@ -184,14 +232,39 @@ is the source of truth for paths and payloads.
 - [x] Encrypted credential storage, device pairing, token separation
 - [x] OpenAI-compatible gateway with streaming and OpenAI-shaped errors
 - [x] Pod image running one or two vLLM servers on a single GPU
-- [ ] Walking skeleton: a real answer from a real pod, measured
+- [x] Walking skeleton: a real answer from a real pod, measured
+      (see [docs/measurements-2026-08-30.md](docs/measurements-2026-08-30.md))
 - [x] German and English throughout, including the service's own messages
 - [x] App UI: pairing, overview, template editor with model picker, client tokens, settings
 - [x] Tauri shell, with the device token in the OS keychain and a tray indicator
 - [x] In-app help, self-checking first-run guide, generated screenshots
 - [x] Scheduler, idle shutdown, wake-on-request, spend limits
-- [ ] Several pods at once (the gateway already routes by model name)
+- [x] Several pods at once, one per template, routed by client token
 - [ ] Code signing, so the app opens without a warning
+
+## Releases
+
+The version lives in seven files — the root manifest, four workspaces, the Tauri
+config and the Rust crate — and installers, container tags and the app's own
+"about" line each read a different one. So it is never edited by hand:
+
+```bash
+node tools/bump-version.mjs patch    # 0.1.0 -> 0.1.1
+node tools/bump-version.mjs minor    # 0.1.0 -> 0.2.0
+node tools/bump-version.mjs major    # 0.1.0 -> 1.0.0
+node tools/bump-version.mjs 1.2.3    # or say it outright
+```
+
+In practice you never run that either. **Actions → "Bump version and tag" → Run
+workflow** runs the tests, moves the number, commits it and pushes the tag —
+and the tag is what starts the release build. A release is still a decision, so
+it is started by hand; what is automatic is the counting and the consistency.
+
+Pushing a `v*` tag builds:
+
+- `ghcr.io/login-tb/runpod-launcher:<version>` for amd64 and arm64
+- `.dmg` for both Mac architectures and `.msi` for Windows, attached to a
+  **draft** release for you to look over before publishing
 
 ## Licence
 

@@ -18,7 +18,7 @@
 
 services:
   launcher:
-    image: ghcr.io/OWNER/runpod-launcher:latest
+    image: ghcr.io/login-tb/runpod-launcher:latest
     # To run your own build instead of the published image, comment out `image`
     # above and uncomment this:
     # build: .
