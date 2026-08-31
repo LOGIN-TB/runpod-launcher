@@ -34,14 +34,15 @@ if (!TOKEN) {
   process.exit(1)
 }
 
-/** Every screen, in both languages and both colour schemes. */
-const SCREENS = [
-  { name: 'overview', nav: 0 },
-  { name: 'templates', nav: 1 },
-  { name: 'clients', nav: 2 },
-  { name: 'settings', nav: 3 },
-  { name: 'help', nav: 4 },
-]
+/**
+ * Every screen, in both languages and both colour schemes.
+ *
+ * Selected by name rather than by position in the sidebar: the labels are
+ * translated and the order does change. Adding "Mappings" in the middle shifted
+ * every index after it, which would have captured Settings under the name of a
+ * different screen — a screenshot that is confidently of the wrong thing.
+ */
+const SCREENS = ['overview', 'templates', 'clients', 'mappings', 'settings', 'help']
 const LOCALES = ['en', 'de']
 const SCHEMES = ['light', 'dark']
 
@@ -59,6 +60,9 @@ for (const locale of LOCALES) {
       // Pretend the clock is fixed, so a screenshot does not differ from the
       // last one only by the minute it was taken.
       timezoneId: 'Europe/Berlin',
+      // The browser locale as well as the app's, so dates in the image read the
+      // way they do for somebody whose system matches the language they chose.
+      locale: locale === 'de' ? 'de-DE' : 'en-US',
     })
 
     await context.addInitScript(
@@ -72,13 +76,18 @@ for (const locale of LOCALES) {
     const page = await context.newPage()
     await page.goto(UI, { waitUntil: 'networkidle' })
 
+    // Put the first-run guide away. It sits above every screen and would take
+    // the top half of each image, pushing the thing being photographed below
+    // the fold — a screenshot of the guide, four times, under other names.
+    const skip = page.locator('button[data-action="skip-setup"]')
+    if (await skip.count()) await skip.click()
+
     for (const screen of SCREENS) {
-      const buttons = page.locator('nav.sidebar button.nav-item')
-      await buttons.nth(screen.nav).click()
+      await page.locator(`nav.sidebar button[data-screen="${screen}"]`).click()
       // Let the screen's own fetches settle, so nothing is caught mid-skeleton.
       await page.waitForTimeout(900)
 
-      const file = `${screen.name}-${locale}-${colorScheme}.png`
+      const file = `${screen}-${locale}-${colorScheme}.png`
       await page.screenshot({ path: resolve(OUT, file) })
       shots.push(file)
     }
@@ -93,7 +102,7 @@ await browser.close()
 // by hand in two places.
 writeFileSync(
   resolve(OUT, 'index.json'),
-  `${JSON.stringify({ generatedFrom: UI, screens: SCREENS.map((s) => s.name), locales: LOCALES, schemes: SCHEMES, files: shots }, null, 2)}\n`,
+  `${JSON.stringify({ generatedFrom: UI, screens: SCREENS, locales: LOCALES, schemes: SCHEMES, files: shots }, null, 2)}\n`,
 )
 
 console.log(`Wrote ${shots.length} screenshots to ${OUT}`)

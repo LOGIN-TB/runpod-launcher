@@ -142,7 +142,9 @@ export function Setup({
         ))}
       </ol>
 
-      <Button variant="ghost" onClick={onDismiss}>
+      {/* Named for the screenshot run, which has to put the guide away to
+          photograph the screen underneath it. */}
+      <Button variant="ghost" data-action="skip-setup" onClick={onDismiss}>
         {t('setup.skip')}
       </Button>
     </Card>

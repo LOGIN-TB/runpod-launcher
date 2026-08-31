@@ -10,6 +10,15 @@ interface I18nValue {
   /** Locale-aware money and number formatting, so strings never hard-code separators. */
   money: (usd: number) => string
   number: (value: number, options?: Intl.NumberFormatOptions) => string
+  /**
+   * Times and dates in the language that was chosen, not the browser's.
+   *
+   * `toLocaleTimeString()` with no argument reads the browser's locale, so
+   * somebody on an English system who picks German got German text with
+   * "2:27:34 PM" in it.
+   */
+  time: (value: Date | string) => string
+  dateTime: (value: Date | string) => string
 }
 
 const I18nContext = createContext<I18nValue | null>(null)
@@ -35,6 +44,8 @@ export function I18nProvider({ children }: { children: ReactNode }): ReactNode {
       money: (usd) =>
         new Intl.NumberFormat(tag, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(usd),
       number: (n, options) => new Intl.NumberFormat(tag, options).format(n),
+      time: (value) => new Date(value).toLocaleTimeString(tag),
+      dateTime: (value) => new Date(value).toLocaleString(tag),
     }
   }, [locale])
 

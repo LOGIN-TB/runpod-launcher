@@ -78,6 +78,9 @@ export function App(): ReactNode {
             type="button"
             className={screen === item.id ? 'nav-item active' : 'nav-item'}
             aria-current={screen === item.id ? 'page' : undefined}
+            /* Named so the screenshot run can find a screen without counting
+               positions in a list that is translated and does change. */
+            data-screen={item.id}
             onClick={() => setScreen(item.id)}
           >
             {item.label}

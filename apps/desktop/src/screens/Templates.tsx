@@ -168,7 +168,7 @@ function TemplateEditor({
   onDone: () => void
   onCancel: () => void
 }): ReactNode {
-  const { t, money } = useI18n()
+  const { t, money, number } = useI18n()
   const [gpus, setGpus] = useState<GpuType[]>([])
   const [name, setName] = useState(existing?.name ?? '')
   const [gpuId, setGpuId] = useState(existing?.gpuTypeId ?? '')
@@ -528,10 +528,10 @@ function TemplateEditor({
       {contextBudget ? (
         <p className={contextBudget.fits ? 'muted small' : 'field-error'}>
           {contextBudget.fits
-            ? t('template.contextFits', { max: contextBudget.max.toLocaleString() })
+            ? t('template.contextFits', { max: number(contextBudget.max) })
             : t('template.contextTooLarge', {
-                asked: contextBudget.asked.toLocaleString(),
-                max: contextBudget.max.toLocaleString(),
+                asked: number(contextBudget.asked),
+                max: number(contextBudget.max),
               })}
         </p>
       ) : null}
@@ -551,8 +551,8 @@ function TemplateEditor({
             {...(contextBudget && !contextBudget.fits
               ? {
                   error: t('template.contextTooLarge', {
-                    asked: contextBudget.asked.toLocaleString(),
-                    max: contextBudget.max.toLocaleString(),
+                    asked: number(contextBudget.asked),
+                    max: number(contextBudget.max),
                   }),
                 }
               : {})}

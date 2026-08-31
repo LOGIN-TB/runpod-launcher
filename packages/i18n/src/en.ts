@@ -289,6 +289,8 @@ export const en = {
   'mappings.byTemplateHint':
     'How many accesses point at each pod. A pod that is running with nothing pointed at it costs money and serves no one.',
   'mappings.noUsers': 'Nothing points here',
+  'mappings.userCountOne': 'One access',
+  'mappings.noPod': 'No pod',
   'mappings.userCount': '{count} accesses',
   'mappings.orphaned': 'Running unused',
 

@@ -31,7 +31,7 @@ const TONE: Record<Readiness, 'running' | 'pending' | 'stopped' | 'danger'> = {
  * only visible once both sides are on the same page.
  */
 export function Mappings({ connection }: { connection: Connection }): ReactNode {
-  const { t, money } = useI18n()
+  const { t, money, dateTime } = useI18n()
   const [tokens, setTokens] = useState<ClientToken[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
   const [pods, setPods] = useState<PodStatusReport[]>([])
@@ -114,10 +114,13 @@ export function Mappings({ connection }: { connection: Connection }): ReactNode 
                     <td>
                       {token.templateId === null ? (
                         <Badge tone="stopped">{t('mappings.needsTarget')}</Badge>
+                      ) : pod === undefined ? (
+                        // No pod at all is not the same as a stopped one, and
+                        // saying "stopped" about something that was never
+                        // created sends people looking for one to restart.
+                        <Badge tone="stopped">{t('mappings.noPod')}</Badge>
                       ) : (
-                        <Badge tone={TONE[pod?.readiness ?? 'stopped']}>
-                          {t(`ready.${pod?.readiness ?? 'stopped'}`)}
-                        </Badge>
+                        <Badge tone={TONE[pod.readiness]}>{t(`ready.${pod.readiness}`)}</Badge>
                       )}
                     </td>
                     {/* Unit written out as in the pod list; "/h" is the same in
@@ -125,7 +128,7 @@ export function Mappings({ connection }: { connection: Connection }): ReactNode 
                     <td>{pod ? `${money(pod.costPerHour)}/h` : '—'}</td>
                     <td className="muted small">
                       {token.lastUsedAt
-                        ? new Date(token.lastUsedAt).toLocaleString()
+                        ? dateTime(token.lastUsedAt)
                         : t('clients.neverUsed')}
                     </td>
                   </tr>
@@ -153,7 +156,9 @@ export function Mappings({ connection }: { connection: Connection }): ReactNode 
                   <span className="muted small">
                     {users.length === 0
                       ? t('mappings.noUsers')
-                      : t('mappings.userCount', { count: users.length })}
+                      : users.length === 1
+                        ? t('mappings.userCountOne')
+                        : t('mappings.userCount', { count: users.length })}
                   </span>
                 </div>
                 {orphaned ? <Badge tone="danger">{t('mappings.orphaned')}</Badge> : null}

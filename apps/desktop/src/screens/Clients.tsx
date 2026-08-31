@@ -14,7 +14,7 @@ import { Confirm } from '../components/Confirm.js'
  * box to paste the address into for a given tool.
  */
 export function Clients({ connection }: { connection: Connection }): ReactNode {
-  const { t } = useI18n()
+  const { t, dateTime } = useI18n()
   const [tokens, setTokens] = useState<ClientToken[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
   const [name, setName] = useState('')
@@ -130,7 +130,7 @@ export function Clients({ connection }: { connection: Connection }): ReactNode {
                   <strong>{token.name}</strong>
                   <span className="muted small">
                     {token.lastUsedAt
-                      ? t('clients.lastUsed', { when: new Date(token.lastUsedAt).toLocaleString() })
+                      ? t('clients.lastUsed', { when: dateTime(token.lastUsedAt) })
                       : t('clients.neverUsed')}
                   </span>
                 </div>

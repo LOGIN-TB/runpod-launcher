@@ -35,9 +35,31 @@ const call = (path, body, method = 'POST') =>
     body: body === undefined ? undefined : JSON.stringify(body),
   })
 
-await call('/settings', { timezone: 'Europe/Berlin', dailyLimitUsd: 15, monthlyLimitUsd: 200 }, 'PATCH')
+await call(
+  '/settings',
+  {
+    timezone: 'Europe/Berlin',
+    dailyLimitUsd: 15,
+    monthlyLimitUsd: 200,
+    maxConcurrentPods: 2,
+    // Obviously not a key. It only has to make the screens look configured;
+    // anything that talks to RunPod will show its error state, which is itself
+    // worth illustrating.
+    runpodApiKey: 'rpa_documentation_placeholder_0000000000',
+  },
+  'PATCH',
+)
 
-await call('/templates', {
+/**
+ * Two templates, so the mappings screen has something to show.
+ *
+ * One application per pod is the arrangement worth illustrating: a single
+ * template would make every screen look like the old one-pod launcher, which is
+ * precisely the shape this stopped being.
+ */
+const template = async (body) => (await call('/templates', body)).json()
+
+const chat = await template({
   name: 'qwen-chat',
   engine: 'vllm',
   image: 'vllm/vllm-openai:v0.28.0',
@@ -46,6 +68,8 @@ await call('/templates', {
   maxModelLen: 32768,
   maxConcurrentSequences: 64,
   lifecycleMode: 'stopResume',
+  toolCallParser: 'qwen3_xml',
+  reasoningParser: 'qwen3',
   networkVolumeId: null,
   schedule: {
     enabled: true,
@@ -58,7 +82,24 @@ await call('/templates', {
   },
 })
 
-await call('/client-tokens', { name: 'n8n' })
-await call('/client-tokens', { name: 'RAG indexer' })
+const rag = await template({
+  name: 'rag-embeddings',
+  engine: 'vllm',
+  image: 'vllm/vllm-openai:v0.28.0',
+  chatModel: null,
+  embeddingModel: { repoId: 'Qwen/Qwen3-Embedding-0.6B' },
+  gpuTypeId: 'NVIDIA A40',
+  maxConcurrentSequences: 64,
+  lifecycleMode: 'stopResume',
+  networkVolumeId: null,
+})
+
+// Each access points at the pod it should reach: two applications on the chat
+// pod, one on the embedding pod, and one deliberately unassigned so the state
+// that needs attention is visible too.
+await call('/client-tokens', { name: 'n8n', templateId: chat.id })
+await call('/client-tokens', { name: 'Hermes agent', templateId: chat.id })
+await call('/client-tokens', { name: 'RAG indexer', templateId: rag.id })
+await call('/client-tokens', { name: 'Open WebUI', templateId: null })
 
 console.log(paired.token)

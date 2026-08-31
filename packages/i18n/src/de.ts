@@ -294,6 +294,8 @@ export const de = {
   'mappings.byTemplateHint':
     'Wie viele Zugänge auf jeden Pod zeigen. Ein laufender Pod, auf den niemand zeigt, kostet Geld und bedient nichts.',
   'mappings.noUsers': 'Kein Zugang zeigt hierauf',
+  'mappings.userCountOne': 'Ein Zugang',
+  'mappings.noPod': 'Kein Pod',
   'mappings.userCount': '{count} Zugänge',
   'mappings.orphaned': 'Läuft ungenutzt',
 

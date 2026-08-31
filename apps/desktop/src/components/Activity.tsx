@@ -12,7 +12,7 @@ import { Card } from './primitives.js'
  * audit log the whole time and nowhere on screen, so it read as a failure.
  */
 export function Activity({ connection }: { connection: Connection }): ReactNode {
-  const { t } = useI18n()
+  const { t, time } = useI18n()
   const [events, setEvents] = useState<ActivityEvent[]>([])
 
   useEffect(() => {
@@ -32,7 +32,7 @@ export function Activity({ connection }: { connection: Connection }): ReactNode 
       <ul className="activity">
         {events.slice(0, 8).map((event, index) => (
           <li key={`${event.at}-${index}`}>
-            <span className="muted small">{new Date(event.at).toLocaleTimeString()}</span>
+            <span className="muted small">{time(event.at)}</span>
             <span>{describe(event, t)}</span>
           </li>
         ))}
