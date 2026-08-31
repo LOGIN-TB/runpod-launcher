@@ -52,7 +52,12 @@ jobs:
       - uses: actions/setup-node@v5
         with: { node-version: 24, cache: npm }
       - uses: dtolnay/rust-toolchain@stable
-        with: { targets: ${{ matrix.target }} }
+        # Block style, not `with: { targets: ${{ ... }} }`. In a YAML flow
+        # mapping the `{{` of an expression opens a nested mapping, so the file
+        # does not parse at all — and GitHub reports that only by falling back
+        # to the file path where the workflow name should be.
+        with:
+          targets: ${{ matrix.target }}
       - uses: swatinem/rust-cache@v2
         with: { workspaces: './apps/desktop/src-tauri -> target' }
       - run: npm ci
