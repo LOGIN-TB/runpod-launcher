@@ -46,14 +46,13 @@ abgelegt. In der Compose-Datei stehen nur Port, TLS-Betriebsart und Zeitzone.
 
 ## 2. Den Dienst installieren
 
-> **Einmalig nötig, sonst scheitert der Download:** Neue GHCR-Pakete sind
-> **privat**, auch bei einem öffentlichen Repo. Nach dem ersten
-> Veröffentlichungslauf einmal auf GitHub → *Packages* → `runpod-launcher` →
-> *Package settings* → *Change visibility* → **Public**. Ohne das antwortet
-> `docker compose up` mit `unauthorized` oder `manifest unknown`.
+> Das Image `:latest` folgt dem Stand von `main` und liegt für amd64 und arm64
+> bereit. Versionierte Tags (`:0.1.0`) entstehen mit einer Release.
 >
-> Das Image `:latest` folgt dem Stand von `main`. Versionierte Tags
-> (`:0.1.0`) entstehen erst mit einer Release.
+> Sollte ein Download einmal `unauthorized` melden, ist die Sichtbarkeit des
+> Pakets das Erste zum Nachsehen: GitHub → *Packages* → `runpod-launcher` →
+> *Package settings*. Hier ist es öffentlich, und aus einem öffentlichen Repo
+> veröffentlicht sollte es das bleiben.
 
 ### Weg A — Docker Compose von Hand
 
@@ -62,6 +61,9 @@ curl -O https://raw.githubusercontent.com/LOGIN-TB/runpod-launcher/main/docker-c
 docker compose up -d
 docker compose logs | grep -A4 "Pair the launcher app"
 ```
+
+Auf älteren Installationen heißt der Befehl `docker-compose` mit Bindestrich
+statt `docker compose` — beide tun hier dasselbe.
 
 Der letzte Befehl zeigt den **Kopplungscode**. Er gilt einmal und verfällt nach
 30 Minuten. Läuft der Dienst auf einem anderen Rechner, brauchst du dessen

@@ -41,12 +41,12 @@ Nothing confidential goes in a file. The RunPod key, the HuggingFace token and
 any webhook URL are typed into the app and stored encrypted. What follows sets
 only a port and a TLS mode.
 
-> **One-time, or the pull fails:** a new GHCR package is **private** even when
-> the repository is public. After the first publish, go to GitHub → *Packages* →
-> `runpod-launcher` → *Package settings* → *Change visibility* → **Public**.
-> Until then `docker compose up` answers `unauthorized` or `manifest unknown`.
+> `:latest` follows `main` and is published for amd64 and arm64. Version tags
+> (`:0.1.0`) appear with a release.
 >
-> `:latest` follows `main`. Version tags (`:0.1.0`) appear only with a release.
+> If a pull ever answers `unauthorized`, the package's visibility is the thing to
+> check: GitHub → *Packages* → `runpod-launcher` → *Package settings*. It is
+> public here, and published from a public repository it should stay that way.
 
 ### With Docker Compose
 
